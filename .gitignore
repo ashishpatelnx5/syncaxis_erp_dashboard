@@ -1,0 +1,6 @@
+# Dependencies
+node_modules/
+
+# Real database credentials — never commit these
+dashboard-app/dashboard-app/.env
+dashboard-app/dashboard-app/setup-readonly-login.sql

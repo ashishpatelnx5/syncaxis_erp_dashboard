@@ -1,0 +1,11 @@
+# Copy this file to ".env" and fill in your real values.
+# Never commit the real .env file anywhere shared.
+
+DB_SERVER=192.168.3.9
+DB_INSTANCE=SQLEXPRESS
+DB_DATABASE=SYNCAXIS
+DB_USER=sa
+DB_PASSWORD=CHANGE_ME
+
+# Port the dashboard web app itself runs on (open http://localhost:PORT)
+PORT=3000

@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SYNCAXIS — Management Dashboard</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div class="app">
+
+  <nav class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">SX</span>
+      <span class="brand-name">SYNCAXIS</span>
+    </div>
+    <div class="nav-group">
+      <button class="nav-item active" data-module="crm">CRM Pipeline</button>
+      <button class="nav-item" data-module="sales">Sales &amp; Revenue</button>
+      <button class="nav-item" data-module="purchase">Purchase &amp; Vendors</button>
+      <button class="nav-item" data-module="inventory">Inventory &amp; Stock</button>
+      <button class="nav-item" data-module="finance">Finance (AR / AP)</button>
+      <button class="nav-item" data-module="production">Production &amp; WOs</button>
+    </div>
+    <div class="sidebar-footer">
+      <span id="dbStatusDot" class="status-dot"></span>
+      <span id="dbStatusText">Checking connection…</span>
+    </div>
+  </nav>
+
+  <main class="content">
+
+    <header class="content-header">
+      <h1 id="pageTitle">Sales &amp; Revenue</h1>
+      <div class="header-actions">
+        <span id="lastUpdated" class="muted"></span>
+        <button id="refreshBtn" class="btn">Refresh</button>
+      </div>
+    </header>
+
+    <!-- ===================== CRM ===================== -->
+    <section class="panel active" id="panel-crm">
+      <div class="stat-row">
+        <div class="stat">
+          <div class="stat-label" id="crm-enquiries-label">Enquiries</div>
+          <div class="stat-value" id="crm-enquiries">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label" id="crm-quotations-label">Quotations</div>
+          <div class="stat-value" id="crm-quotations">—</div>
+        </div>
+        <div class="stat stat-hero">
+          <div class="stat-label" id="crm-orders-label">Sales orders</div>
+          <div class="stat-value" id="crm-orders">—</div>
+          <div class="muted" id="crm-order-value"></div>
+        </div>
+        <div class="stat stat-alert">
+          <div class="stat-label">Follow-ups due (next 7 days)</div>
+          <div class="stat-value" id="crm-followups-due">—</div>
+        </div>
+      </div>
+      <div class="crm-fy-bar">
+        <label for="crm-fy-select">Financial year</label>
+        <select id="crm-fy-select"></select>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3 id="crm-funnel-title">Pipeline volume</h3>
+          <canvas id="chart-crm-funnel"></canvas>
+        </div>
+        <div class="card">
+          <h3 id="crm-trend-title">Monthly pipeline trend</h3>
+          <canvas id="chart-crm-monthly-trend"></canvas>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3><span id="crm-breakdown-title">Monthly breakdown</span> <span class="muted">(click a month row to filter the tables below)</span></h3>
+          <table class="data-table" id="table-crm-monthly-breakdown">
+            <thead><tr><th>Month</th><th>Enquiries</th><th>Quotations</th><th>Qtn. Value</th><th>Sales Orders</th><th>Order Value</th><th>Invoiced</th><th>Invoice Value</th><th>Follow-ups</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="crm-filter-bar" id="crm-filter-bar" hidden>
+        Showing: <strong id="crm-filter-label"></strong>
+        <button id="crm-filter-clear" class="btn-link">Show most recent instead</button>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="crm-enquiries-title">Recent enquiries</h3>
+          <table class="data-table" id="table-crm-enquiries">
+            <thead><tr><th>Enquiry No.</th><th>Customer</th><th>Date</th><th>Status</th><th>Quotation No.</th><th>Next follow-up</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="crm-quotations-title">Recent quotations</h3>
+          <table class="data-table" id="table-crm-quotations">
+            <thead><tr><th>Qtn No.</th><th>Customer</th><th>Value</th><th>Status</th><th>SO No.</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="crm-orders-title">Recent sales orders</h3>
+          <table class="data-table" id="table-crm-orders">
+            <thead><tr><th>SO No.</th><th>Customer PO No.</th><th>Customer</th><th>Value</th><th>Status</th><th>Invoiced</th><th>Invoice No.</th><th>Invoice Amount</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="crm-invoices-title">Recent invoices</h3>
+          <table class="data-table" id="table-crm-invoices">
+            <thead><tr><th>Invoice No.</th><th>Customer</th><th>Date</th><th>Value</th><th>Status</th><th>SO No.</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3>Follow-ups due or overdue</h3>
+          <table class="data-table" id="table-crm-followups">
+            <thead><tr><th>Customer</th><th>Based on</th><th>Next follow-up</th><th>Salesperson</th><th>Remark</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== SALES ===================== -->
+    <section class="panel" id="panel-sales">
+      <div class="stat-row">
+        <div class="stat stat-hero">
+          <div class="stat-label">Revenue this month</div>
+          <div class="stat-value" id="sales-revenue">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Invoices this month</div>
+          <div class="stat-value" id="sales-invoices">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Avg. invoice value</div>
+          <div class="stat-value" id="sales-avg">—</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Revenue trend — last 12 months</h3>
+          <canvas id="chart-sales-trend"></canvas>
+        </div>
+        <div class="card">
+          <h3>Top 10 customers (12 mo.)</h3>
+          <table class="data-table" id="table-top-customers">
+            <thead><tr><th>Customer</th><th>Revenue</th><th>Invoices</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== PURCHASE ===================== -->
+    <section class="panel" id="panel-purchase">
+      <div class="stat-row">
+        <div class="stat stat-hero">
+          <div class="stat-label">Spend this month</div>
+          <div class="stat-value" id="purchase-spend">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Bills this month</div>
+          <div class="stat-value" id="purchase-bills">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Avg. bill value</div>
+          <div class="stat-value" id="purchase-avg">—</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Purchase spend trend — last 12 months</h3>
+          <canvas id="chart-purchase-trend"></canvas>
+        </div>
+        <div class="card">
+          <h3>Top 10 vendors (12 mo.)</h3>
+          <table class="data-table" id="table-top-vendors">
+            <thead><tr><th>Vendor</th><th>Spend</th><th>Bills</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== INVENTORY ===================== -->
+    <section class="panel" id="panel-inventory">
+      <div class="stat-row">
+        <div class="stat stat-hero">
+          <div class="stat-label">SKUs in stock</div>
+          <div class="stat-value" id="inv-skus">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total qty on hand</div>
+          <div class="stat-value" id="inv-qty">—</div>
+        </div>
+        <div class="stat stat-alert">
+          <div class="stat-label">Below reorder level</div>
+          <div class="stat-value" id="inv-lowstock-count">—</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Low stock — below reorder level</h3>
+          <table class="data-table" id="table-low-stock">
+            <thead><tr><th>Item</th><th>On hand</th><th>Reorder level</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Top 10 items by quantity on hand</h3>
+          <table class="data-table" id="table-top-items">
+            <thead><tr><th>Item</th><th>Qty on hand</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== FINANCE ===================== -->
+    <section class="panel" id="panel-finance">
+      <div class="stat-row">
+        <div class="stat stat-hero">
+          <div class="stat-label">Total receivable</div>
+          <div class="stat-value" id="fin-receivable">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total payable</div>
+          <div class="stat-value" id="fin-payable">—</div>
+        </div>
+        <div class="stat stat-alert">
+          <div class="stat-label">Overdue receivable</div>
+          <div class="stat-value" id="fin-overdue">—</div>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3>Receivables aging</h3>
+          <canvas id="chart-aging"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== PRODUCTION ===================== -->
+    <section class="panel" id="panel-production">
+      <div class="stat-row">
+        <div class="stat stat-hero">
+          <div class="stat-label">Open work orders</div>
+          <div class="stat-value" id="prod-open">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Closed this month</div>
+          <div class="stat-value" id="prod-closed">—</div>
+        </div>
+        <div class="stat stat-alert">
+          <div class="stat-label">Overdue work orders</div>
+          <div class="stat-value" id="prod-overdue">—</div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Work orders by status code</h3>
+          <canvas id="chart-wo-status"></canvas>
+        </div>
+        <div class="card">
+          <h3>Shop Job Orders by status code</h3>
+          <canvas id="chart-sjo-status"></canvas>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script src="dashboard.js"></script>
+</body>
+</html>
