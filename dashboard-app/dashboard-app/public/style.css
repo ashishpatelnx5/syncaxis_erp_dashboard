@@ -227,6 +227,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 20px;
+  overflow-x: auto;
 }
 
 .card h3 {
@@ -241,10 +242,19 @@ body {
 }
 
 /* ---------- Tables ---------- */
+/* Rows stay single-line; the card (overflow-x: auto above) scrolls
+   sideways instead of cells wrapping and stretching row height — matters
+   for long columns like Item(s), which lists every distinct item on an
+   order/issue/invoice. */
 .data-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+}
+
+.data-table td,
+.data-table th {
+  white-space: nowrap;
 }
 
 .data-table th {

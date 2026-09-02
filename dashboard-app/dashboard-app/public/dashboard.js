@@ -451,7 +451,7 @@ async function lineageSearch() {
   const url = '/api/lineage/orders' + (params.length ? '?' + params.join('&') : '');
   const orders = await fetchJSON(url);
   fillTable('table-lineage-orders', orders,
-    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td><td>${r.itemNames || '—'}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}<td>${r.statusCode ?? ''}</td></tr>`, 7);
+    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}<td>${r.statusCode ?? ''}</td><td>${r.itemNames || '—'}</td></tr>`, 7);
 }
 
 function lineageStage(title, count, dotClass, bodyHtml) {
@@ -511,15 +511,15 @@ function renderLineageTimeline(data) {
   html += lineageStage('Manufacturing (Shop Job Orders)', sjos.length || null,
     sjos.length ? (sjos.every(s => s.statusCode === 'F') ? 'done' : 'partial') : 'empty',
     sjos.length
-      ? lineageSubList(['SJO No.', 'Item', 'Qty', 'Status'],
-          sjos.map(s => `<tr><td>${s.sjoNo}</td><td class="wrap">${(s.itemName || s.itemCode || '').trim()}</td><td>${fmtNum(s.orderedQty)}</td><td>${s.statusCode ?? ''}</td></tr>`))
+      ? lineageSubList(['SJO No.', 'Date', 'Item', 'Qty', 'Status'],
+          sjos.map(s => `<tr><td>${s.sjoNo}</td><td>${fmtDate(s.sjoDate)}</td><td class="wrap">${(s.itemName || s.itemCode || '').trim()}</td><td>${fmtNum(s.orderedQty)}</td><td>${s.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">No manufacturing job triggered for this order.</div>`);
 
   html += lineageStage('Work Order &amp; Production Receipt', prod.length || null,
     prod.length ? (prod.every(p => p.statusCode === 'C') ? 'done' : 'partial') : 'empty',
     prod.length
-      ? lineageSubList(['WO No.', 'Item', 'Received / Ordered', 'Status'],
-          prod.map(p => `<tr><td>${p.workOrderNo ?? ''}</td><td class="wrap">${(p.itemName || p.itemCode || '').trim()}</td><td>${fmtNum(p.receivedQty)} / ${fmtNum(p.orderedQty)}</td><td>${p.statusCode ?? ''}</td></tr>`))
+      ? lineageSubList(['WO No.', 'Receipt Date', 'Item', 'Received / Ordered', 'Status'],
+          prod.map(p => `<tr><td>${p.workOrderNo ?? ''}</td><td>${fmtDate(p.receiptDate)}</td><td class="wrap">${(p.itemName || p.itemCode || '').trim()}</td><td>${fmtNum(p.receivedQty)} / ${fmtNum(p.orderedQty)}</td><td>${p.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">No production receipt recorded yet.</div>`);
 
   html += lineageStage('Store — Material Issued', issues.length || null, issues.length ? 'done' : 'empty',
