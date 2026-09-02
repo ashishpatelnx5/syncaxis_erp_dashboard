@@ -63,6 +63,17 @@ function parseFYRange(fyStr) {
 app.get('/api/sales/summary', (req, res) => runQuery(res, queries.sales.summary));
 app.get('/api/sales/trend', (req, res) => runQuery(res, queries.sales.trend));
 app.get('/api/sales/top-customers', (req, res) => runQuery(res, queries.sales.topCustomers));
+app.get('/api/sales/monthly-breakdown', (req, res) => {
+  const fy = parseFYRange(req.query.fy);
+  runQuery(res, queries.sales.monthlyBreakdown, { start: fy.start, end: fy.end });
+});
+// Reuses queries.crm.recentInvoices (same underlying XDCINVHDR data CRM
+// Pipeline's invoice stage already reads) — kept in one place so both
+// panels stay consistent, same pattern as queries.purchase.bills.
+app.get('/api/sales/invoices', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.crm.recentInvoices(!!range), range && { start: range.start, end: range.end });
+});
 
 // ---------- CRM (Enquiry / Quotation / Sales Order / Follow-up) ----------
 app.get('/api/crm/summary', (req, res) => {

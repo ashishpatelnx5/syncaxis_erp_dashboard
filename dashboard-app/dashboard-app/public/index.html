@@ -206,6 +206,34 @@
           </table>
         </div>
       </div>
+      <div class="crm-fy-bar">
+        <label for="sales-fy-select">Financial year</label>
+        <select id="sales-fy-select"></select>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="sales-breakdown-title">Monthly breakdown <span class="muted">(click a month row to filter the invoice list below)</span></h3>
+          <div class="table-summary" id="sales-breakdown-summary"></div>
+          <table class="data-table" id="table-sales-monthly-breakdown">
+            <thead><tr><th>Month</th><th>Invoices</th><th>Revenue</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="crm-filter-bar" id="sales-month-filter-bar" hidden>
+        Showing: <strong id="sales-month-filter-label"></strong>
+        <button id="sales-month-filter-clear" class="btn-link">Show most recent instead</button>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="sales-invoices-title">Recent invoices</h3>
+          <div class="table-summary" id="sales-invoices-summary"></div>
+          <table class="data-table" id="table-sales-invoices">
+            <thead><tr><th>Invoice No.</th><th>Customer</th><th>Date</th><th>Value</th><th>Status</th><th>SO No.</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- ===================== PURCHASE ===================== -->

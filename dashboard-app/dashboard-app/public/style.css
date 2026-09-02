@@ -372,7 +372,8 @@ body {
 #table-lineage-monthly-breakdown tbody tr.selected,
 #table-finance-monthly-breakdown tbody tr.selected,
 #table-purchase-monthly-breakdown tbody tr.selected,
-#table-prod-monthly-breakdown tbody tr.selected {
+#table-prod-monthly-breakdown tbody tr.selected,
+#table-sales-monthly-breakdown tbody tr.selected {
   background: var(--steel);
   color: #fff;
 }
@@ -381,7 +382,8 @@ body {
 #table-lineage-monthly-breakdown tbody tr.selected td,
 #table-finance-monthly-breakdown tbody tr.selected td,
 #table-purchase-monthly-breakdown tbody tr.selected td,
-#table-prod-monthly-breakdown tbody tr.selected td {
+#table-prod-monthly-breakdown tbody tr.selected td,
+#table-sales-monthly-breakdown tbody tr.selected td {
   border-bottom-color: var(--steel);
 }
 

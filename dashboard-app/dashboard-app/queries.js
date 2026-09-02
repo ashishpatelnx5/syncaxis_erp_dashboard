@@ -50,6 +50,25 @@ const queries = {
       WHERE h.XDIHINVDT >= DATEADD(MONTH, -12, GETDATE())
       GROUP BY c.MCMCUSTNM
       ORDER BY totalRevenue DESC;
+    `,
+    // Indian FY-bound monthly breakdown, same always-12-rows shape as
+    // crm.monthlyBreakdown (which also tracks invoices, but as one column
+    // among enquiry/quotation/order counts inside the pipeline funnel — this
+    // is the revenue-first view of the same underlying XDCINVHDR data).
+    monthlyBreakdown: `
+      WITH Months AS (
+        SELECT TOP 12 FORMAT(DATEADD(MONTH, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @start), 'yyyy-MM') AS period
+        FROM sys.all_objects
+      ),
+      Inv AS (
+        SELECT FORMAT(XDIHINVDT, 'yyyy-MM') AS period, COUNT(*) AS invoiceCount, SUM(XDIHAMT) AS revenue
+        FROM XDCINVHDR WHERE XDIHINVDT >= @start AND XDIHINVDT < @end
+        GROUP BY FORMAT(XDIHINVDT, 'yyyy-MM')
+      )
+      SELECT m.period, ISNULL(i.invoiceCount, 0) AS invoiceCount, ISNULL(i.revenue, 0) AS revenue
+      FROM Months m
+      LEFT JOIN Inv i ON m.period = i.period
+      ORDER BY m.period;
     `
   },
 

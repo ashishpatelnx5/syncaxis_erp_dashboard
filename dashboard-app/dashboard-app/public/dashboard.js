@@ -564,11 +564,48 @@ async function viewLineage(orderId) {
   await loadLineageDetail(orderId);
 }
 
+let salesSelectedFY = currentFYStartYear();
+let salesFYInitialized = false;
+let salesSelectedMonth = null; // 'YYYY-MM', or null = show most-recent-15 (default)
+
+function initSalesFYSelect() {
+  if (salesFYInitialized) return;
+  salesFYInitialized = true;
+  const select = document.getElementById('sales-fy-select');
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.value = salesSelectedFY;
+  select.addEventListener('change', () => {
+    salesSelectedFY = Number(select.value);
+    refreshCurrent();
+  });
+}
+
+function selectSalesMonth(period) {
+  salesSelectedMonth = period;
+  refreshCurrent();
+}
+
+function clearSalesMonth() {
+  salesSelectedMonth = null;
+  refreshCurrent();
+}
+
 async function loadSales() {
-  const [summary, trend, topCustomers] = await Promise.all([
+  initSalesFYSelect();
+  const fyQuery = `?fy=${salesSelectedFY}`;
+  const monthQuery = salesSelectedMonth ? `?month=${encodeURIComponent(salesSelectedMonth)}` : '';
+  const [summary, trend, topCustomers, monthly, invoices] = await Promise.all([
     fetchJSON('/api/sales/summary'),
     fetchJSON('/api/sales/trend'),
-    fetchJSON('/api/sales/top-customers')
+    fetchJSON('/api/sales/top-customers'),
+    fetchJSON('/api/sales/monthly-breakdown' + fyQuery),
+    fetchJSON('/api/sales/invoices' + monthQuery)
   ]);
   const s = summary[0] || {};
   document.getElementById('sales-revenue').textContent = fmtMoney(s.totalRevenue);
@@ -579,6 +616,27 @@ async function loadSales() {
 
   fillTable('table-top-customers', topCustomers,
     r => `<tr><td>${r.customerName}</td>${moneyTd(r.totalRevenue)}${numTd(r.invoiceCount)}</tr>`, 3);
+
+  const fyText = fyLabel(salesSelectedFY);
+  document.getElementById('sales-breakdown-title').innerHTML =
+    `Monthly breakdown — ${fyText} <span class="muted">(click a month row to filter the invoice list below)</span>`;
+  fillTable('table-sales-monthly-breakdown', monthly,
+    r => `<tr class="${r.period === salesSelectedMonth ? 'selected' : ''}" onclick="selectSalesMonth('${r.period}')"><td>${r.period}</td>${numTd(r.invoiceCount)}${moneyTd(r.revenue)}</tr>`, 3);
+  const fyInvoiceTotal = monthly.reduce((sum, r) => sum + (Number(r.invoiceCount) || 0), 0);
+  const fyRevenueTotal = monthly.reduce((sum, r) => sum + (Number(r.revenue) || 0), 0);
+  document.getElementById('sales-breakdown-summary').innerHTML =
+    `FY total &middot; Invoices: <strong>${fmtNum(fyInvoiceTotal)}</strong> &middot; Revenue: <strong>${fmtMoney(fyRevenueTotal)}</strong>`;
+
+  const filterBar = document.getElementById('sales-month-filter-bar');
+  filterBar.hidden = !salesSelectedMonth;
+  const monthLabel = salesSelectedMonth ? crmMonthLabel(salesSelectedMonth) : '';
+  document.getElementById('sales-month-filter-label').textContent = monthLabel;
+  document.getElementById('sales-invoices-title').textContent = salesSelectedMonth
+    ? `Invoices — ${monthLabel}` : 'Recent invoices';
+
+  fillTable('table-sales-invoices', invoices,
+    r => `<tr><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
+  tableSummary('sales-invoices-summary', invoices, 'invoiceValue', 'invoice', salesSelectedMonth ? 'Total' : 'Total (of rows shown)');
 }
 
 let purchaseSelectedFY = currentFYStartYear();
@@ -995,6 +1053,7 @@ document.getElementById('lineage-month-filter-clear').addEventListener('click', 
 document.getElementById('finance-month-filter-clear').addEventListener('click', clearFinanceMonth);
 document.getElementById('purchase-month-filter-clear').addEventListener('click', clearPurchaseMonth);
 document.getElementById('prod-month-filter-clear').addEventListener('click', clearProdMonth);
+document.getElementById('sales-month-filter-clear').addEventListener('click', clearSalesMonth);
 document.getElementById('lineage-search').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') lineageSearchSubmit();
 });
