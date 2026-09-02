@@ -330,6 +330,13 @@ async function loadCRM() {
 
   fillTable('table-crm-monthly-breakdown', monthly,
     r => `<tr class="${r.period === crmSelectedMonth ? 'selected' : ''}" onclick="selectCrmMonth('${r.period}')"><td>${r.period}</td>${numTd(r.enquiryCount)}${numTd(r.quotationCount)}${moneyTd(r.quotationValue)}${numTd(r.orderCount)}${moneyTd(r.orderValue)}${numTd(r.invoiceCount)}${moneyTd(r.invoiceValue)}${numTd(r.followUpCount)}</tr>`, 9);
+  const fySum = (key) => monthly.reduce((sum, r) => sum + (Number(r[key]) || 0), 0);
+  document.getElementById('crm-breakdown-summary').innerHTML =
+    `FY total &middot; Enquiries: <strong>${fmtNum(fySum('enquiryCount'))}</strong>` +
+    ` &middot; Quotations: <strong>${fmtNum(fySum('quotationCount'))}</strong> (<strong>${fmtMoney(fySum('quotationValue'))}</strong>)` +
+    ` &middot; Orders: <strong>${fmtNum(fySum('orderCount'))}</strong> (<strong>${fmtMoney(fySum('orderValue'))}</strong>)` +
+    ` &middot; Invoices: <strong>${fmtNum(fySum('invoiceCount'))}</strong> (<strong>${fmtMoney(fySum('invoiceValue'))}</strong>)` +
+    ` &middot; Follow-ups: <strong>${fmtNum(fySum('followUpCount'))}</strong>`;
 
   const filterBar = document.getElementById('crm-filter-bar');
   filterBar.hidden = !crmSelectedMonth;
@@ -342,18 +349,23 @@ async function loadCRM() {
 
   fillTable('table-crm-enquiries', enquiries,
     r => `<tr><td>${r.enquiryNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.enquiryDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.quotationNo ?? '—'}</td>${dateTd(r.nextFollowUp)}</tr>`, 6);
+  tableSummary('crm-enquiries-summary', enquiries, null, 'enquiry', null);
 
   fillTable('table-crm-quotations', quotations,
     r => `<tr><td>${r.quotationNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.quotationValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 5);
+  tableSummary('crm-quotations-summary', quotations, 'quotationValue', 'quotation', crmSelectedMonth ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-orders', orders,
     r => `<tr><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.orderValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td>${td(r.invoiceCount ? fmtNum(r.invoiceCount) : 'No', Number(r.invoiceCount) || 0, 'num')}<td>${r.lastInvoiceNo ?? '—'}</td>${td(r.invoicedAmount ? fmtMoney(r.invoicedAmount) : '—', Number(r.invoicedAmount) || 0, 'num')}</tr>`, 8);
+  tableSummary('crm-orders-summary', orders, 'orderValue', 'order', crmSelectedMonth ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-invoices', invoices,
     r => `<tr><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
+  tableSummary('crm-invoices-summary', invoices, 'invoiceValue', 'invoice', crmSelectedMonth ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-followups', followups,
     r => `<tr><td>${r.customerName ?? ''}</td><td>${r.basedOnLabel ?? r.basedOn ?? ''}</td>${dateTd(r.nextFollowUpDate)}<td>${r.salesperson ?? ''}</td><td>${r.remark ?? r.nextAgenda ?? ''}</td></tr>`, 5);
+  tableSummary('crm-followups-summary', followups, null, 'follow-up', null);
 }
 
 // ---------------- Order Lineage ----------------
@@ -456,9 +468,10 @@ function lineageStage(title, count, dotClass, bodyHtml) {
     </div>`;
 }
 
-function lineageSubList(rowsHtml) {
+function lineageSubList(headers, rowsHtml) {
   if (!rowsHtml.length) return '';
-  return `<div class="lineage-sublist"><table><tbody>${rowsHtml.join('')}</tbody></table></div>`;
+  const thead = `<thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>`;
+  return `<div class="lineage-sublist"><table>${thead}<tbody>${rowsHtml.join('')}</tbody></table></div>`;
 }
 
 function renderLineageTimeline(data) {
@@ -497,30 +510,35 @@ function renderLineageTimeline(data) {
   html += lineageStage('Manufacturing (Shop Job Orders)', sjos.length || null,
     sjos.length ? (sjos.every(s => s.statusCode === 'F') ? 'done' : 'partial') : 'empty',
     sjos.length
-      ? lineageSubList(sjos.map(s => `<tr><td>${s.sjoNo}</td><td>${(s.itemCode || '').trim()}</td><td>${fmtNum(s.orderedQty)}</td><td>${s.statusCode ?? ''}</td></tr>`))
+      ? lineageSubList(['SJO No.', 'Item', 'Qty', 'Status'],
+          sjos.map(s => `<tr><td>${s.sjoNo}</td><td class="wrap">${(s.itemName || s.itemCode || '').trim()}</td><td>${fmtNum(s.orderedQty)}</td><td>${s.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">No manufacturing job triggered for this order.</div>`);
 
   html += lineageStage('Work Order &amp; Production Receipt', prod.length || null,
     prod.length ? (prod.every(p => p.statusCode === 'C') ? 'done' : 'partial') : 'empty',
     prod.length
-      ? lineageSubList(prod.map(p => `<tr><td>${p.workOrderNo ?? ''}</td><td>${(p.itemCode || '').trim()}</td><td>${fmtNum(p.receivedQty)} / ${fmtNum(p.orderedQty)}</td><td>${p.statusCode ?? ''}</td></tr>`))
+      ? lineageSubList(['WO No.', 'Item', 'Received / Ordered', 'Status'],
+          prod.map(p => `<tr><td>${p.workOrderNo ?? ''}</td><td class="wrap">${(p.itemName || p.itemCode || '').trim()}</td><td>${fmtNum(p.receivedQty)} / ${fmtNum(p.orderedQty)}</td><td>${p.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">No production receipt recorded yet.</div>`);
 
   html += lineageStage('Store — Material Issued', issues.length || null, issues.length ? 'done' : 'empty',
     issues.length
-      ? lineageSubList(issues.map(i => `<tr><td>${i.issueNo}</td><td>${fmtDate(i.issueDate)}</td><td>${i.sjoNo ?? ''}</td></tr>`))
+      ? lineageSubList(['Issue No.', 'Date', 'SJO No.', 'Item(s)'],
+          issues.map(i => `<tr><td>${i.issueNo}</td><td>${fmtDate(i.issueDate)}</td><td>${i.sjoNo ?? ''}</td><td class="wrap">${i.itemNames || '—'}</td></tr>`))
       : `<div class="lineage-empty-note">No material issued from store yet.</div>`);
 
   html += lineageStage('Despatch', challans.length || null, challans.length ? 'done' : (invoices.length ? 'partial' : 'empty'),
     challans.length
-      ? lineageSubList(challans.map(c => `<tr><td>${c.challanNo}</td><td>${fmtDate(c.challanDate)}</td><td>${c.statusCode ?? ''}</td></tr>`))
+      ? lineageSubList(['Challan No.', 'Date', 'Item(s)', 'Status'],
+          challans.map(c => `<tr><td>${c.challanNo}</td><td>${fmtDate(c.challanDate)}</td><td class="wrap">${c.itemNames || '—'}</td><td>${c.statusCode ?? ''}</td></tr>`))
       : (invoices.length
           ? `<div class="lineage-empty-note">No separate delivery challan — despatched together with the invoice below.</div>`
           : `<div class="lineage-empty-note">Not yet despatched.</div>`));
 
   html += lineageStage('Invoice', invoices.length || null, invoices.length ? 'done' : 'empty',
     invoices.length
-      ? lineageSubList(invoices.map(i => `<tr><td>${i.invoiceNo}</td><td>${fmtDate(i.invoiceDate)}</td><td class="num">${fmtMoney(i.invoiceValue)}</td><td>${i.statusCode ?? ''}</td></tr>`))
+      ? lineageSubList(['Invoice No.', 'Date', 'Item(s)', 'Value', 'Status'],
+          invoices.map(i => `<tr><td>${i.invoiceNo}</td><td>${fmtDate(i.invoiceDate)}</td><td class="wrap">${i.itemNames || '—'}</td><td class="num">${fmtMoney(i.invoiceValue)}</td><td>${i.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">Not yet invoiced.</div>`);
 
   html += `
@@ -817,15 +835,19 @@ function initFinanceFYSelect() {
 // "91 customers · Total outstanding: ₹3,02,37,479". Pass rows already
 // scoped to whatever's currently displayed (a month filter, etc.) so the
 // total tracks the table, not the unfiltered dataset.
+function pluralize(noun) {
+  return /[^aeiou]y$/i.test(noun) ? noun.slice(0, -1) + 'ies' : noun + 's';
+}
+
 function tableSummary(elId, rows, valueKey, noun, label) {
   const el = document.getElementById(elId);
   if (!el) return;
   const count = rows ? rows.length : 0;
   if (count === 0) {
-    el.textContent = `No ${noun}s`;
+    el.textContent = `No ${pluralize(noun)}`;
     return;
   }
-  const countText = `${fmtNum(count)} ${noun}${count === 1 ? '' : 's'}`;
+  const countText = `${fmtNum(count)} ${count === 1 ? noun : pluralize(noun)}`;
   if (!valueKey) { // count-only: no clean monetary field to total (e.g. GRN)
     el.textContent = countText;
     return;

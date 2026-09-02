@@ -559,10 +559,27 @@ body {
   font-size: 12px;
 }
 
+.lineage-sublist th {
+  padding: 6px 10px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+}
+
 .lineage-sublist td {
   padding: 5px 10px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+}
+
+.lineage-sublist td.wrap {
+  white-space: normal;
+  min-width: 220px;
 }
 
 .lineage-sublist tr:last-child td { border-bottom: none; }

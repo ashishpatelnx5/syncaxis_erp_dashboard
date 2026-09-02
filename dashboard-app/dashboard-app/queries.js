@@ -801,11 +801,16 @@ const queries = {
       LEFT JOIN XOAFHDR oaf ON oaf.XOAFHORDID = o.XOBAUTOID
       WHERE o.XOBAUTOID = @orderId;
     `,
+    // XSHSITMCD/XWOITMCD join straight to MITMMAST.MIMITMICOD (verified) —
+    // one item per SJO/work-order row, so a plain LEFT JOIN is enough here,
+    // unlike the STRING_AGG needed below for issue/despatch/invoice lines
+    // (which can carry several different items per document).
     shopJobOrders: `
       SELECT
         s.XSHSJAUTONO AS sjoId,
         CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo,
         s.XSHSITMCD AS itemCode,
+        LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName,
         s.XSHORDQTY AS orderedQty,
         s.XSHCOMPQTY AS completedQty,
         s.XSHSJOSTAT AS statusCode,
@@ -813,6 +818,7 @@ const queries = {
         s.XSHCMPLTDT AS completedDate
       FROM XOAFHDR oaf
       JOIN XSJOHDR s ON s.XSHOAFID = oaf.XOAFHAUTOID
+      LEFT JOIN MITMMAST m ON s.XSHSITMCD = m.MIMITMICOD
       WHERE oaf.XOAFHORDID = @orderId
       ORDER BY s.XSHSJODT;
     `,
@@ -820,6 +826,7 @@ const queries = {
       SELECT
         wo.XWONO AS workOrderNo,
         wo.XWOITMCD AS itemCode,
+        LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName,
         wo.XWOQTYORD AS orderedQty,
         wo.XWOQTYRECV AS receivedQty,
         wo.XWOSTATUS AS statusCode,
@@ -832,18 +839,38 @@ const queries = {
       JOIN XSJOHDR s ON s.XSHOAFID = oaf.XOAFHAUTOID
       JOIN XWORCPHDR wr ON wr.XWRHSJOID = s.XSHSJAUTONO
       LEFT JOIN XWOHDR wo ON wo.XWOAUTOID = wr.XWRHWOREFID
+      LEFT JOIN MITMMAST m ON wo.XWOITMCD = m.MIMITMICOD
       WHERE oaf.XOAFHORDID = @orderId
       ORDER BY wr.XWRHWODT;
     `,
+    // Item names via XISSDTL (issue line) -> XIDSTKID -> XSTKIDEN -> MITMMAST
+    // (same stock-identity join used by the Inventory queries). One issue
+    // header can have several line items (verified: up to 3+ distinct items
+    // per issue in this data), so they're STRING_AGG'd into one column
+    // rather than exploding this into a line-level table, keeping the same
+    // one-row-per-document shape as every other lineage sub-list. A few
+    // MIMNAME values in this data carry a stray trailing newline — stripped
+    // explicitly since RTRIM only trims spaces, not CHAR(10)/CHAR(13).
     storeIssues: `
       SELECT
         i.XIHISSNO AS issueNo,
         i.XIHISSDT AS issueDate,
         i.XIHSTATUS AS statusCode,
-        CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo
+        CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo,
+        items.itemNames
       FROM XOAFHDR oaf
       JOIN XSJOHDR s ON s.XSHOAFID = oaf.XOAFHAUTOID
       JOIN XISSHDR i ON i.XIHDOCID = s.XSHSJAUTONO AND i.XIHSJOWOTYP = 'S'
+      OUTER APPLY (
+        SELECT STRING_AGG(itemName, ', ') AS itemNames
+        FROM (
+          SELECT DISTINCT LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName
+          FROM XISSDTL d
+          LEFT JOIN XSTKIDEN si ON d.XIDSTKID = si.XSIAUTOID
+          LEFT JOIN MITMMAST m ON si.XSIITMCD = m.MIMITMICOD
+          WHERE d.XIDISSID = i.XIHAUTOID
+        ) x
+      ) items
       WHERE oaf.XOAFHORDID = @orderId
       ORDER BY i.XIHISSDT;
     `,
@@ -852,26 +879,53 @@ const queries = {
       -- this data (17 headers total). When empty for an order, despatch
       -- happened via the combined dispatch-cum-invoice document instead
       -- (see the invoices query below).
+      -- XDCDSITMCD (the item-code column on the detail line) is NULL on
+      -- every row in this data — item is resolved the same indirect way as
+      -- Store Issues instead: XDCDSTKID -> XSTKIDEN -> MITMMAST (verified
+      -- 22/22 sampled lines resolve this way).
       SELECT DISTINCT
         h.XDCHDCNO AS challanNo,
         h.XDCHDATE AS challanDate,
-        h.XDCHSTAT AS statusCode
+        h.XDCHSTAT AS statusCode,
+        items.itemNames
       FROM XOAFHDR oaf
       JOIN XDCDTL d ON d.XDCDOAFID = oaf.XOAFHAUTOID
       JOIN XDCHDR h ON d.XDCDHID = h.XDCHAUTOID
+      OUTER APPLY (
+        SELECT STRING_AGG(itemName, ', ') AS itemNames
+        FROM (
+          SELECT DISTINCT LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName
+          FROM XDCDTL d2
+          LEFT JOIN XSTKIDEN si ON d2.XDCDSTKID = si.XSIAUTOID
+          LEFT JOIN MITMMAST m ON si.XSIITMCD = m.MIMITMICOD
+          WHERE d2.XDCDHID = h.XDCHAUTOID
+        ) x
+      ) items
       WHERE oaf.XOAFHORDID = @orderId
       ORDER BY h.XDCHDATE;
     `,
+    // XDIDITMCD joins straight to MITMMAST.MIMITMICOD (verified) — unlike
+    // Store Issues/Despatch, no XSTKIDEN indirection needed here.
     invoices: `
       SELECT DISTINCT
         ih.XDIHAUTOID AS invoiceId,
         ih.XDIHINVNO AS invoiceNo,
         ih.XDIHINVDT AS invoiceDate,
         ih.XDIHAMT AS invoiceValue,
-        ih.XDIHSTATUS AS statusCode
+        ih.XDIHSTATUS AS statusCode,
+        items.itemNames
       FROM XOAFHDR oaf
       JOIN XDCINVDTL d ON d.XDIDOAFID = oaf.XOAFHAUTOID
       JOIN XDCINVHDR ih ON d.XDIDREFID = ih.XDIHAUTOID
+      OUTER APPLY (
+        SELECT STRING_AGG(itemName, ', ') AS itemNames
+        FROM (
+          SELECT DISTINCT LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName
+          FROM XDCINVDTL d2
+          LEFT JOIN MITMMAST m ON d2.XDIDITMCD = m.MIMITMICOD
+          WHERE d2.XDIDREFID = ih.XDIHAUTOID
+        ) x
+      ) items
       WHERE oaf.XOAFHORDID = @orderId
       ORDER BY ih.XDIHINVDT;
     `,
