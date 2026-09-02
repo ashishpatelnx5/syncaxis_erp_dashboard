@@ -67,3 +67,16 @@ SELECT XFWBASEON, COUNT(*) AS RecordCount
 FROM XFOLLOWUPDTL
 GROUP BY XFWBASEON
 ORDER BY RecordCount DESC;
+
+-- 10) Creditors report: does XOH_ACCCD (payable side) actually match vendor
+--     codes in MVNDMAST? Debtors already relies on XOH_ACCCD = customer code
+--     (proven via lineage.customerAR), but the vendor side is a new, unverified
+--     assumption. If MatchedVendors is 0 or far below TotalPayableRows, the
+--     Creditors report's vendor names will mostly fall back to raw account
+--     codes — paste this back if that happens so the join can be fixed.
+SELECT
+  COUNT(*) AS TotalPayableRows,
+  COUNT(v.MVmVndCode) AS MatchedVendors
+FROM XOUTSTNDHDR o
+LEFT JOIN MVNDMAST v ON o.XOH_ACCCD = v.MVmVndCode
+WHERE o.XOH_DR_CR = 'C';

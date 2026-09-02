@@ -6,6 +6,18 @@ const charts = {}; // keep Chart.js instances so we can destroy/recreate on refr
 function fmtMoney(v) { return money.format(Number(v) || 0); }
 function fmtNum(v) { return num.format(Number(v) || 0); }
 
+// td() helpers: render a cell with both its display text and a raw,
+// type-correct value in data-sort, so column sorting works on the real
+// number/date/string rather than the formatted (comma/currency) text.
+function td(display, sortVal, extraClass) {
+  const cls = extraClass ? ` class="${extraClass}"` : '';
+  const sort = sortVal === undefined || sortVal === null ? '' : String(sortVal);
+  return `<td${cls} data-sort="${sort.replace(/"/g, '&quot;')}">${display}</td>`;
+}
+function moneyTd(v) { return td(fmtMoney(v), Number(v) || 0, 'num'); }
+function numTd(v) { return td(fmtNum(v), Number(v) || 0, 'num'); }
+function dateTd(v) { return td(v ? new Date(v).toLocaleDateString() : '', v ? new Date(v).getTime() : 0); }
+
 async function fetchJSON(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
@@ -17,9 +29,179 @@ function fillTable(tableId, rows, renderRow, colSpan) {
   tbody.innerHTML = '';
   if (!rows || rows.length === 0) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${colSpan}">No data returned</td></tr>`;
-    return;
+  } else {
+    rows.forEach(r => { tbody.insertAdjacentHTML('beforeend', renderRow(r)); });
   }
-  rows.forEach(r => { tbody.insertAdjacentHTML('beforeend', renderRow(r)); });
+  resetTablePage(tableId);
+  applyPagination(document.getElementById(tableId));
+}
+
+// ---------------- Sortable table columns ----------------
+// Click a <th> to sort the current tbody rows by that column. Uses each
+// <td data-sort="..."> raw value when present (see td()/moneyTd()/etc.)
+// so money/number/date columns sort correctly, not just alphabetically.
+// Rows are re-appended in place, so row click handlers keep working.
+
+function initSortableTable(table) {
+  if (table.dataset.sortableInit) return;
+  table.dataset.sortableInit = '1';
+  const headRow = table.querySelector('thead tr');
+  if (!headRow) return;
+  Array.from(headRow.children).forEach((th, idx) => {
+    th.classList.add('sortable');
+    th.addEventListener('click', () => sortTableByColumn(table, idx, th));
+  });
+}
+
+function sortTableByColumn(table, colIndex, th) {
+  const tbody = table.querySelector('tbody');
+  const rows = Array.from(tbody.querySelectorAll('tr')).filter(r => !r.classList.contains('empty-row'));
+  if (!rows.length) return;
+
+  const nextDir = th.dataset.sortDir === 'asc' ? 'desc' : 'asc';
+  table.querySelectorAll('th').forEach(h => {
+    if (h !== th) { delete h.dataset.sortDir; h.classList.remove('sort-asc', 'sort-desc'); }
+  });
+  th.dataset.sortDir = nextDir;
+  th.classList.toggle('sort-asc', nextDir === 'asc');
+  th.classList.toggle('sort-desc', nextDir === 'desc');
+
+  const cellValue = (row) => {
+    const cell = row.children[colIndex];
+    if (!cell) return '';
+    return cell.hasAttribute('data-sort') ? cell.getAttribute('data-sort') : cell.textContent.trim();
+  };
+  const isNumeric = rows.every(r => {
+    const v = cellValue(r);
+    return v === '' || !isNaN(Number(v));
+  });
+
+  rows.sort((a, b) => {
+    let va = cellValue(a), vb = cellValue(b);
+    if (isNumeric) {
+      va = va === '' ? -Infinity : Number(va);
+      vb = vb === '' ? -Infinity : Number(vb);
+      return nextDir === 'asc' ? va - vb : vb - va;
+    }
+    va = va.toLowerCase(); vb = vb.toLowerCase();
+    if (va < vb) return nextDir === 'asc' ? -1 : 1;
+    if (va > vb) return nextDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
+
+  resetTablePage(table.id);
+  applyPagination(table);
+}
+
+// ---------------- Table pagination ----------------
+// Every .data-table gets a "Rows per page" control (10/25/50/100/All) below
+// it — the chosen size is remembered per-table in localStorage, so it acts
+// like a per-table setting rather than resetting every time you switch tabs.
+// Pagination hides <tr> elements with the `hidden` attribute rather than
+// removing them, so sorting (which reorders the same <tr> nodes) and click
+// handlers on rows (month/order selection) keep working unchanged.
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 'All'];
+const DEFAULT_PAGE_SIZE = 10;
+const paginationState = {}; // tableId -> { page, pageSize }
+
+function pageSizeStorageKey(tableId) { return `syncaxis.pageSize.${tableId}`; }
+
+function getStoredPageSize(tableId) {
+  try {
+    const v = localStorage.getItem(pageSizeStorageKey(tableId));
+    if (v === 'All') return Infinity;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_PAGE_SIZE;
+  } catch (err) { return DEFAULT_PAGE_SIZE; }
+}
+
+function setStoredPageSize(tableId, size) {
+  try { localStorage.setItem(pageSizeStorageKey(tableId), size === Infinity ? 'All' : String(size)); } catch (err) { /* ignore */ }
+}
+
+function tableDataRows(table) {
+  return Array.from(table.querySelectorAll('tbody tr')).filter(r => !r.classList.contains('empty-row'));
+}
+
+function resetTablePage(tableId) {
+  if (paginationState[tableId]) paginationState[tableId].page = 1;
+}
+
+function initTablePagination(table) {
+  if (table.dataset.paginationInit) return;
+  table.dataset.paginationInit = '1';
+  const tableId = table.id;
+
+  const bar = document.createElement('div');
+  bar.className = 'table-pagination';
+  bar.innerHTML = `
+    <label class="page-size-label">Rows per page
+      <select class="page-size-select"></select>
+    </label>
+    <span class="page-info"></span>
+    <span class="page-buttons">
+      <button type="button" class="btn-link page-prev">&laquo; Prev</button>
+      <button type="button" class="btn-link page-next">Next &raquo;</button>
+    </span>
+  `;
+  table.insertAdjacentElement('afterend', bar);
+
+  const select = bar.querySelector('.page-size-select');
+  PAGE_SIZE_OPTIONS.forEach(opt => {
+    const o = document.createElement('option');
+    o.value = opt;
+    o.textContent = opt;
+    select.appendChild(o);
+  });
+
+  const storedSize = getStoredPageSize(tableId);
+  paginationState[tableId] = { page: 1, pageSize: storedSize };
+  select.value = storedSize === Infinity ? 'All' : String(storedSize);
+
+  select.addEventListener('change', () => {
+    const size = select.value === 'All' ? Infinity : Number(select.value);
+    paginationState[tableId] = { page: 1, pageSize: size };
+    setStoredPageSize(tableId, size);
+    applyPagination(table);
+  });
+  bar.querySelector('.page-prev').addEventListener('click', () => {
+    const st = paginationState[tableId];
+    if (st.page > 1) { st.page--; applyPagination(table); }
+  });
+  bar.querySelector('.page-next').addEventListener('click', () => {
+    const st = paginationState[tableId];
+    const totalPages = Math.max(1, Math.ceil(tableDataRows(table).length / (st.pageSize === Infinity ? 1 : st.pageSize)));
+    if (st.page < totalPages) { st.page++; applyPagination(table); }
+  });
+
+  applyPagination(table);
+}
+
+function applyPagination(table) {
+  if (!table) return;
+  const tableId = table.id;
+  const st = paginationState[tableId];
+  if (!st) return; // pagination not initialized yet for this table
+
+  const rows = tableDataRows(table);
+  const total = rows.length;
+  const pageSize = st.pageSize === Infinity ? Math.max(total, 1) : st.pageSize;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (st.page > totalPages) st.page = totalPages;
+  if (st.page < 1) st.page = 1;
+  const startIdx = (st.page - 1) * pageSize;
+  const endIdx = startIdx + pageSize;
+  rows.forEach((r, i) => { r.hidden = !(i >= startIdx && i < endIdx); });
+
+  const bar = table.nextElementSibling;
+  if (!bar || !bar.classList.contains('table-pagination')) return;
+  const info = bar.querySelector('.page-info');
+  info.textContent = total === 0 ? 'No rows' : `${startIdx + 1}–${Math.min(endIdx, total)} of ${total}`;
+  bar.querySelector('.page-prev').disabled = st.page <= 1;
+  bar.querySelector('.page-next').disabled = st.page >= totalPages;
 }
 
 function lineChart(canvasId, labels, data, label, color) {
@@ -147,7 +329,7 @@ async function loadCRM() {
   ]);
 
   fillTable('table-crm-monthly-breakdown', monthly,
-    r => `<tr class="${r.period === crmSelectedMonth ? 'selected' : ''}" onclick="selectCrmMonth('${r.period}')"><td>${r.period}</td><td>${fmtNum(r.enquiryCount)}</td><td>${fmtNum(r.quotationCount)}</td><td class="num">${fmtMoney(r.quotationValue)}</td><td>${fmtNum(r.orderCount)}</td><td class="num">${fmtMoney(r.orderValue)}</td><td>${fmtNum(r.invoiceCount)}</td><td class="num">${fmtMoney(r.invoiceValue)}</td><td>${fmtNum(r.followUpCount)}</td></tr>`, 9);
+    r => `<tr class="${r.period === crmSelectedMonth ? 'selected' : ''}" onclick="selectCrmMonth('${r.period}')"><td>${r.period}</td>${numTd(r.enquiryCount)}${numTd(r.quotationCount)}${moneyTd(r.quotationValue)}${numTd(r.orderCount)}${moneyTd(r.orderValue)}${numTd(r.invoiceCount)}${moneyTd(r.invoiceValue)}${numTd(r.followUpCount)}</tr>`, 9);
 
   const filterBar = document.getElementById('crm-filter-bar');
   filterBar.hidden = !crmSelectedMonth;
@@ -159,19 +341,19 @@ async function loadCRM() {
   document.getElementById('crm-invoices-title').textContent = crmSelectedMonth ? `Invoices — ${label}` : 'Recent invoices';
 
   fillTable('table-crm-enquiries', enquiries,
-    r => `<tr><td>${r.enquiryNo ?? ''}</td><td>${r.customerName || ''}</td><td>${r.enquiryDate ? new Date(r.enquiryDate).toLocaleDateString() : ''}</td><td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.quotationNo ?? '—'}</td><td>${r.nextFollowUp ? new Date(r.nextFollowUp).toLocaleDateString() : '—'}</td></tr>`, 6);
+    r => `<tr><td>${r.enquiryNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.enquiryDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.quotationNo ?? '—'}</td>${dateTd(r.nextFollowUp)}</tr>`, 6);
 
   fillTable('table-crm-quotations', quotations,
-    r => `<tr><td>${r.quotationNo ?? ''}</td><td>${r.customerName || ''}</td><td class="num">${fmtMoney(r.quotationValue)}</td><td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 5);
+    r => `<tr><td>${r.quotationNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.quotationValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 5);
 
   fillTable('table-crm-orders', orders,
-    r => `<tr><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td><td class="num">${fmtMoney(r.orderValue)}</td><td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.invoiceCount ? fmtNum(r.invoiceCount) : 'No'}</td><td>${r.lastInvoiceNo ?? '—'}</td><td class="num">${r.invoicedAmount ? fmtMoney(r.invoicedAmount) : '—'}</td></tr>`, 8);
+    r => `<tr><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.orderValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td>${td(r.invoiceCount ? fmtNum(r.invoiceCount) : 'No', Number(r.invoiceCount) || 0, 'num')}<td>${r.lastInvoiceNo ?? '—'}</td>${td(r.invoicedAmount ? fmtMoney(r.invoicedAmount) : '—', Number(r.invoicedAmount) || 0, 'num')}</tr>`, 8);
 
   fillTable('table-crm-invoices', invoices,
-    r => `<tr><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td><td>${r.invoiceDate ? new Date(r.invoiceDate).toLocaleDateString() : ''}</td><td class="num">${fmtMoney(r.invoiceValue)}</td><td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
+    r => `<tr><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
 
   fillTable('table-crm-followups', followups,
-    r => `<tr><td>${r.customerName ?? ''}</td><td>${r.basedOnLabel ?? r.basedOn ?? ''}</td><td>${r.nextFollowUpDate ? new Date(r.nextFollowUpDate).toLocaleDateString() : ''}</td><td>${r.salesperson ?? ''}</td><td>${r.remark ?? r.nextAgenda ?? ''}</td></tr>`, 5);
+    r => `<tr><td>${r.customerName ?? ''}</td><td>${r.basedOnLabel ?? r.basedOn ?? ''}</td>${dateTd(r.nextFollowUpDate)}<td>${r.salesperson ?? ''}</td><td>${r.remark ?? r.nextAgenda ?? ''}</td></tr>`, 5);
 }
 
 // ---------------- Order Lineage ----------------
@@ -230,7 +412,7 @@ async function loadLineage() {
   document.getElementById('lineage-breakdown-title').innerHTML =
     `Monthly breakdown — ${fyText} <span class="muted">(click a month row to filter the order list below)</span>`;
   fillTable('table-lineage-monthly-breakdown', monthly,
-    r => `<tr class="${r.period === lineageSelectedMonth ? 'selected' : ''}" onclick="selectLineageMonth('${r.period}')"><td>${r.period}</td><td>${fmtNum(r.orderCount)}</td><td class="num">${fmtMoney(r.orderValue)}</td></tr>`, 3);
+    r => `<tr class="${r.period === lineageSelectedMonth ? 'selected' : ''}" onclick="selectLineageMonth('${r.period}')"><td>${r.period}</td>${numTd(r.orderCount)}${moneyTd(r.orderValue)}</tr>`, 3);
 
   const filterBar = document.getElementById('lineage-month-filter-bar');
   filterBar.hidden = !lineageSelectedMonth;
@@ -257,7 +439,7 @@ async function lineageSearch() {
   const url = '/api/lineage/orders' + (params.length ? '?' + params.join('&') : '');
   const orders = await fetchJSON(url);
   fillTable('table-lineage-orders', orders,
-    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td><td>${fmtDate(r.orderDate)}</td><td class="num">${fmtMoney(r.orderValue)}</td><td>${r.statusCode ?? ''}</td></tr>`, 6);
+    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
 }
 
 function lineageStage(title, count, dotClass, bodyHtml) {
@@ -396,14 +578,53 @@ async function loadSales() {
   lineChart('chart-sales-trend', trend.map(r => r.period), trend.map(r => r.revenue), 'Revenue', '#3E6B94');
 
   fillTable('table-top-customers', topCustomers,
-    r => `<tr><td>${r.customerName}</td><td class="num">${fmtMoney(r.totalRevenue)}</td><td>${fmtNum(r.invoiceCount)}</td></tr>`, 3);
+    r => `<tr><td>${r.customerName}</td>${moneyTd(r.totalRevenue)}${numTd(r.invoiceCount)}</tr>`, 3);
+}
+
+let purchaseSelectedFY = currentFYStartYear();
+let purchaseFYInitialized = false;
+let purchaseSelectedMonth = null; // 'YYYY-MM', or null = show most-recent-50 (default)
+
+function initPurchaseFYSelect() {
+  if (purchaseFYInitialized) return;
+  purchaseFYInitialized = true;
+  const select = document.getElementById('purchase-fy-select');
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.value = purchaseSelectedFY;
+  select.addEventListener('change', () => {
+    purchaseSelectedFY = Number(select.value);
+    refreshCurrent();
+  });
+}
+
+function selectPurchaseMonth(period) {
+  purchaseSelectedMonth = period;
+  refreshCurrent();
+}
+
+function clearPurchaseMonth() {
+  purchaseSelectedMonth = null;
+  refreshCurrent();
 }
 
 async function loadPurchase() {
-  const [summary, trend, topVendors] = await Promise.all([
+  initPurchaseFYSelect();
+  const fyQuery = `?fy=${purchaseSelectedFY}`;
+  const monthQuery = purchaseSelectedMonth ? `?month=${encodeURIComponent(purchaseSelectedMonth)}` : '';
+  const [summary, trend, topVendors, monthly, bills, orders, materialReceived] = await Promise.all([
     fetchJSON('/api/purchase/summary'),
     fetchJSON('/api/purchase/trend'),
-    fetchJSON('/api/purchase/top-vendors')
+    fetchJSON('/api/purchase/top-vendors'),
+    fetchJSON('/api/purchase/monthly-breakdown' + fyQuery),
+    fetchJSON('/api/purchase/bills' + monthQuery),
+    fetchJSON('/api/purchase/orders'),
+    fetchJSON('/api/purchase/material-received')
   ]);
   const s = summary[0] || {};
   document.getElementById('purchase-spend').textContent = fmtMoney(s.totalSpend);
@@ -413,14 +634,68 @@ async function loadPurchase() {
   lineChart('chart-purchase-trend', trend.map(r => r.period), trend.map(r => r.spend), 'Spend', '#B8862F');
 
   fillTable('table-top-vendors', topVendors,
-    r => `<tr><td>${r.vendorName}</td><td class="num">${fmtMoney(r.totalSpend)}</td><td>${fmtNum(r.billCount)}</td></tr>`, 3);
+    r => `<tr><td>${r.vendorName}</td>${moneyTd(r.totalSpend)}${numTd(r.billCount)}</tr>`, 3);
+
+  const fyText = fyLabel(purchaseSelectedFY);
+  document.getElementById('purchase-breakdown-title').innerHTML =
+    `Monthly breakdown — ${fyText} <span class="muted">(click a month row to filter the bill list below)</span>`;
+  fillTable('table-purchase-monthly-breakdown', monthly,
+    r => `<tr class="${r.period === purchaseSelectedMonth ? 'selected' : ''}" onclick="selectPurchaseMonth('${r.period}')"><td>${r.period}</td>${numTd(r.billCount)}${moneyTd(r.spend)}</tr>`, 3);
+  const fyBillTotal = monthly.reduce((sum, r) => sum + (Number(r.billCount) || 0), 0);
+  const fySpendTotal = monthly.reduce((sum, r) => sum + (Number(r.spend) || 0), 0);
+  document.getElementById('purchase-breakdown-summary').innerHTML =
+    `FY total &middot; Bills: <strong>${fmtNum(fyBillTotal)}</strong> &middot; Spend: <strong>${fmtMoney(fySpendTotal)}</strong>`;
+
+  const filterBar = document.getElementById('purchase-month-filter-bar');
+  filterBar.hidden = !purchaseSelectedMonth;
+  const monthLabel = purchaseSelectedMonth ? crmMonthLabel(purchaseSelectedMonth) : '';
+  document.getElementById('purchase-month-filter-label').textContent = monthLabel;
+  document.getElementById('purchase-bill-detail-title').textContent = purchaseSelectedMonth
+    ? `Purchase bills — ${monthLabel}` : 'Recent purchase bills';
+
+  fillTable('table-purchase-bill-detail', bills,
+    r => `<tr><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
+  tableSummary('purchase-bill-detail-summary', bills, 'billAmount', 'bill', purchaseSelectedMonth ? 'Total' : 'Total (of rows shown)');
+
+  fillTable('table-purchase-orders', orders,
+    r => `<tr><td>${r.poNo ?? ''}</td><td>${r.vendorName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}${moneyTd(r.receivedValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 6);
+  tableSummary('purchase-orders-summary', orders, 'orderValue', 'PO', 'Total (of rows shown)');
+
+  fillTable('table-purchase-grn', materialReceived,
+    r => `<tr><td>${r.grnNo ?? ''}</td><td>${r.poNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.receiptDate)}<td>${r.vendorChallanNo ?? ''}</td>${dateTd(r.vendorChallanDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 7);
+  tableSummary('purchase-grn-summary', materialReceived, null, 'GRN', null);
+}
+
+let invSelectedFY = currentFYStartYear();
+let invFYInitialized = false;
+
+function initInvFYSelect() {
+  if (invFYInitialized) return;
+  invFYInitialized = true;
+  const select = document.getElementById('inv-fy-select');
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.value = invSelectedFY;
+  select.addEventListener('change', () => {
+    invSelectedFY = Number(select.value);
+    refreshCurrent();
+  });
 }
 
 async function loadInventory() {
-  const [summary, lowStock, topItems] = await Promise.all([
+  initInvFYSelect();
+  const fyQuery = `?fy=${invSelectedFY}`;
+  const [summary, lowStock, topItems, monthly, productionReceipts] = await Promise.all([
     fetchJSON('/api/inventory/summary'),
     fetchJSON('/api/inventory/low-stock'),
-    fetchJSON('/api/inventory/top-items')
+    fetchJSON('/api/inventory/top-items'),
+    fetchJSON('/api/inventory/monthly-breakdown' + fyQuery),
+    fetchJSON('/api/inventory/production-receipts')
   ]);
   const s = summary[0] || {};
   document.getElementById('inv-skus').textContent = fmtNum(s.totalSkusInStock);
@@ -428,16 +703,97 @@ async function loadInventory() {
   document.getElementById('inv-lowstock-count').textContent = fmtNum(lowStock.length);
 
   fillTable('table-low-stock', lowStock,
-    r => `<tr><td>${r.itemName || r.itemCode}</td><td>${fmtNum(r.qtyOnHand)}</td><td>${fmtNum(r.reorderLevel)}</td></tr>`, 3);
+    r => `<tr><td>${r.itemName || r.itemCode}</td>${numTd(r.qtyOnHand)}${numTd(r.reorderLevel)}</tr>`, 3);
 
   fillTable('table-top-items', topItems,
-    r => `<tr><td>${r.itemName || r.itemCode}</td><td>${fmtNum(r.qtyOnHand)}</td></tr>`, 2);
+    r => `<tr><td>${r.itemName || r.itemCode}</td>${numTd(r.qtyOnHand)}</tr>`, 2);
+
+  const fyText = fyLabel(invSelectedFY);
+  document.getElementById('inv-breakdown-title').textContent = `Monthly stock activity — Received → Issued → Produced — ${fyText}`;
+  fillTable('table-inv-monthly-breakdown', monthly,
+    r => `<tr><td>${r.period}</td>${numTd(r.receivedCount)}${numTd(r.issuedCount)}${numTd(r.producedCount)}</tr>`, 4);
+  const fyReceived = monthly.reduce((sum, r) => sum + (Number(r.receivedCount) || 0), 0);
+  const fyIssued = monthly.reduce((sum, r) => sum + (Number(r.issuedCount) || 0), 0);
+  const fyProduced = monthly.reduce((sum, r) => sum + (Number(r.producedCount) || 0), 0);
+  document.getElementById('inv-breakdown-summary').innerHTML =
+    `FY total &middot; Received: <strong>${fmtNum(fyReceived)}</strong> &middot; Issued: <strong>${fmtNum(fyIssued)}</strong> &middot; Produced: <strong>${fmtNum(fyProduced)}</strong>`;
+
+  fillTable('table-inv-production-receipts', productionReceipts,
+    r => `<tr><td>${r.workOrderNo ?? ''}</td><td>${(r.itemCode || '').trim()}</td>${dateTd(r.receiptDate)}${numTd(r.receiptQty)}<td>${r.statusCode ?? ''}</td></tr>`, 5);
+  tableSummary('inv-production-receipts-summary', productionReceipts, null, 'receipt', null);
+}
+
+let financeSelectedFY = currentFYStartYear();
+let financeFYInitialized = false;
+let financeSelectedMonth = null; // 'YYYY-MM', or null = show current outstanding (unfiltered)
+
+function selectFinanceMonth(period) {
+  financeSelectedMonth = period;
+  refreshCurrent();
+}
+
+function clearFinanceMonth() {
+  financeSelectedMonth = null;
+  refreshCurrent();
+}
+
+function initFinanceFYSelect() {
+  if (financeFYInitialized) return;
+  financeFYInitialized = true;
+  const select = document.getElementById('finance-fy-select');
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.value = financeSelectedFY;
+  select.addEventListener('change', () => {
+    financeSelectedFY = Number(select.value);
+    refreshCurrent();
+  });
+}
+
+// Shows "N <noun>(s) · <label>: <money>" above a table, e.g.
+// "91 customers · Total outstanding: ₹3,02,37,479". Pass rows already
+// scoped to whatever's currently displayed (a month filter, etc.) so the
+// total tracks the table, not the unfiltered dataset.
+function tableSummary(elId, rows, valueKey, noun, label) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const count = rows ? rows.length : 0;
+  if (count === 0) {
+    el.textContent = `No ${noun}s`;
+    return;
+  }
+  const countText = `${fmtNum(count)} ${noun}${count === 1 ? '' : 's'}`;
+  if (!valueKey) { // count-only: no clean monetary field to total (e.g. GRN)
+    el.textContent = countText;
+    return;
+  }
+  const total = rows.reduce((sum, r) => sum + (Number(r[valueKey]) || 0), 0);
+  el.innerHTML = `${countText} &middot; ${label}: <strong>${fmtMoney(total)}</strong>`;
+}
+
+function partyAgingRow(r, nameKey) {
+  const overdue = r.daysOverdue != null ? Number(r.daysOverdue) : null;
+  const overdueDisplay = overdue == null ? '—' : (overdue <= 0 ? 'Not yet due' : `${fmtNum(overdue)} days`);
+  const overdueSort = overdue == null ? -Infinity : overdue;
+  return `<tr><td>${r[nameKey] ?? ''}</td>${moneyTd(r.outstandingAmount)}${dateTd(r.oldestDueDate)}${td(overdueDisplay, overdueSort, 'num')}${numTd(r.entryCount)}</tr>`;
 }
 
 async function loadFinance() {
-  const [summary, aging] = await Promise.all([
+  initFinanceFYSelect();
+  const fyQuery = `?fy=${financeSelectedFY}`;
+  const monthQuery = financeSelectedMonth ? `?month=${encodeURIComponent(financeSelectedMonth)}` : '';
+  const [summary, aging, monthly, debtors, creditors, purchaseBills] = await Promise.all([
     fetchJSON('/api/finance/summary'),
-    fetchJSON('/api/finance/aging')
+    fetchJSON('/api/finance/aging'),
+    fetchJSON('/api/finance/monthly-breakdown' + fyQuery),
+    fetchJSON('/api/finance/debtors' + monthQuery),
+    fetchJSON('/api/finance/creditors' + monthQuery),
+    fetchJSON('/api/finance/purchase-bills' + monthQuery)
   ]);
   const s = summary[0] || {};
   document.getElementById('fin-receivable').textContent = fmtMoney(s.totalReceivable);
@@ -445,13 +801,84 @@ async function loadFinance() {
   document.getElementById('fin-overdue').textContent = fmtMoney(s.overdueReceivable);
 
   barChart('chart-aging', aging.map(r => r.bucket.replace(/^\d\.\s*/, '')), aging.map(r => r.amount), 'Outstanding', '#A6423A');
+
+  const fyText = fyLabel(financeSelectedFY);
+  document.getElementById('finance-breakdown-title').innerHTML =
+    `Monthly breakdown — amounts due — ${fyText} <span class="muted">(click a month row to filter the tables below)</span>`;
+  fillTable('table-finance-monthly-breakdown', monthly,
+    r => `<tr class="${r.period === financeSelectedMonth ? 'selected' : ''}" onclick="selectFinanceMonth('${r.period}')"><td>${r.period}</td>${moneyTd(r.receivableDue)}${numTd(r.receivableCount)}${moneyTd(r.payableDue)}${numTd(r.payableCount)}</tr>`, 5);
+  const fyReceivableTotal = monthly.reduce((sum, r) => sum + (Number(r.receivableDue) || 0), 0);
+  const fyPayableTotal = monthly.reduce((sum, r) => sum + (Number(r.payableDue) || 0), 0);
+  document.getElementById('finance-breakdown-summary').innerHTML =
+    `FY total &middot; Receivable due: <strong>${fmtMoney(fyReceivableTotal)}</strong> &middot; Payable due: <strong>${fmtMoney(fyPayableTotal)}</strong>`;
+
+  const filterBar = document.getElementById('finance-month-filter-bar');
+  filterBar.hidden = !financeSelectedMonth;
+  const monthLabel = financeSelectedMonth ? crmMonthLabel(financeSelectedMonth) : '';
+  document.getElementById('finance-month-filter-label').textContent = monthLabel;
+  document.getElementById('finance-debtors-title').textContent = financeSelectedMonth
+    ? `Debtors — receivable due in ${monthLabel}` : 'Debtors — outstanding receivable by customer';
+  document.getElementById('finance-creditors-title').textContent = financeSelectedMonth
+    ? `Creditors — payable due in ${monthLabel}` : 'Creditors — outstanding payable by vendor';
+  document.getElementById('finance-purchase-bills-title').textContent = financeSelectedMonth
+    ? `Purchase bills — ${monthLabel}` : 'Recent purchase bills (expenses)';
+
+  fillTable('table-debtors', debtors, r => partyAgingRow(r, 'customerName'), 5);
+  tableSummary('finance-debtors-summary', debtors, 'outstandingAmount', 'customer', 'Total outstanding');
+
+  fillTable('table-creditors', creditors, r => partyAgingRow(r, 'vendorName'), 5);
+  tableSummary('finance-creditors-summary', creditors, 'outstandingAmount', 'vendor', 'Total outstanding');
+
+  fillTable('table-purchase-bills', purchaseBills,
+    r => `<tr><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
+  tableSummary('finance-purchase-bills-summary', purchaseBills, 'billAmount', 'bill', financeSelectedMonth ? 'Total' : 'Total (of rows shown)');
+}
+
+let prodSelectedFY = currentFYStartYear();
+let prodFYInitialized = false;
+let prodSelectedMonth = null; // 'YYYY-MM', or null = show most-recent-50 (default)
+
+function initProdFYSelect() {
+  if (prodFYInitialized) return;
+  prodFYInitialized = true;
+  const select = document.getElementById('prod-fy-select');
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.value = prodSelectedFY;
+  select.addEventListener('change', () => {
+    prodSelectedFY = Number(select.value);
+    refreshCurrent();
+  });
+}
+
+function selectProdMonth(period) {
+  prodSelectedMonth = period;
+  refreshCurrent();
+}
+
+function clearProdMonth() {
+  prodSelectedMonth = null;
+  refreshCurrent();
 }
 
 async function loadProduction() {
-  const [summary, woStatus, sjoStatus] = await Promise.all([
+  initProdFYSelect();
+  const fyQuery = `?fy=${prodSelectedFY}`;
+  const monthQuery = prodSelectedMonth ? `?month=${encodeURIComponent(prodSelectedMonth)}` : '';
+  const [summary, woStatus, sjoStatus, monthly, oafs, workOrders, materialIssued, readyWorkOrders] = await Promise.all([
     fetchJSON('/api/production/summary'),
     fetchJSON('/api/production/wo-status'),
-    fetchJSON('/api/production/sjo-status')
+    fetchJSON('/api/production/sjo-status'),
+    fetchJSON('/api/production/monthly-breakdown' + fyQuery),
+    fetchJSON('/api/production/oafs' + monthQuery),
+    fetchJSON('/api/production/work-orders' + monthQuery),
+    fetchJSON('/api/production/material-issued' + monthQuery),
+    fetchJSON('/api/production/ready-work-orders' + monthQuery)
   ]);
   const s = summary[0] || {};
   document.getElementById('prod-open').textContent = fmtNum(s.openWorkOrders);
@@ -460,6 +887,47 @@ async function loadProduction() {
 
   barChart('chart-wo-status', woStatus.map(r => r.statusCode ?? '(blank)'), woStatus.map(r => r.count), 'Work Orders', '#3E6B94');
   barChart('chart-sjo-status', sjoStatus.map(r => r.statusCode ?? '(blank)'), sjoStatus.map(r => r.count), 'Shop Job Orders', '#3F7859');
+
+  const fyText = fyLabel(prodSelectedFY);
+  document.getElementById('prod-breakdown-title').innerHTML =
+    `Monthly breakdown — OAF &rarr; Work Order &rarr; Material Issued &rarr; Ready — ${fyText} <span class="muted">(click a month row to filter the tables below)</span>`;
+  fillTable('table-prod-monthly-breakdown', monthly,
+    r => `<tr class="${r.period === prodSelectedMonth ? 'selected' : ''}" onclick="selectProdMonth('${r.period}')"><td>${r.period}</td>${numTd(r.oafCount)}${numTd(r.woCount)}${numTd(r.issueCount)}${numTd(r.readyCount)}</tr>`, 5);
+  const fyOaf = monthly.reduce((sum, r) => sum + (Number(r.oafCount) || 0), 0);
+  const fyWo = monthly.reduce((sum, r) => sum + (Number(r.woCount) || 0), 0);
+  const fyIssue = monthly.reduce((sum, r) => sum + (Number(r.issueCount) || 0), 0);
+  const fyReady = monthly.reduce((sum, r) => sum + (Number(r.readyCount) || 0), 0);
+  document.getElementById('prod-breakdown-summary').innerHTML =
+    `FY total &middot; OAFs: <strong>${fmtNum(fyOaf)}</strong> &middot; Work Orders: <strong>${fmtNum(fyWo)}</strong> &middot; Material Issued: <strong>${fmtNum(fyIssue)}</strong> &middot; Ready: <strong>${fmtNum(fyReady)}</strong>`;
+
+  const filterBar = document.getElementById('prod-month-filter-bar');
+  filterBar.hidden = !prodSelectedMonth;
+  const monthLabel = prodSelectedMonth ? crmMonthLabel(prodSelectedMonth) : '';
+  document.getElementById('prod-month-filter-label').textContent = monthLabel;
+  document.getElementById('prod-oafs-title').textContent = prodSelectedMonth
+    ? `OAFs — ${monthLabel}` : 'Recent Order Acceptance Forms (OAF)';
+  document.getElementById('prod-work-orders-title').textContent = prodSelectedMonth
+    ? `Work Orders — ${monthLabel}` : 'Recent Work Orders';
+  document.getElementById('prod-material-issued-title').textContent = prodSelectedMonth
+    ? `Material issued — ${monthLabel}` : 'Recent material issued';
+  document.getElementById('prod-ready-title').textContent = prodSelectedMonth
+    ? `Ready — ${monthLabel}` : 'Ready (fully received work orders)';
+
+  fillTable('table-prod-oafs', oafs,
+    r => `<tr><td>${r.oafNo ?? ''}</td>${dateTd(r.oafDate)}<td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerName || ''}</td></tr>`, 4);
+  tableSummary('prod-oafs-summary', oafs, null, 'OAF', null);
+
+  fillTable('table-prod-work-orders', workOrders,
+    r => `<tr><td>${r.woNo ?? ''}</td><td>${(r.itemCode || '').trim()}</td>${dateTd(r.orderDate)}${dateTd(r.dueDate)}${numTd(r.orderedQty)}${numTd(r.receivedQty)}<td>${r.statusCode ?? ''}</td></tr>`, 7);
+  tableSummary('prod-work-orders-summary', workOrders, null, 'work order', null);
+
+  fillTable('table-prod-material-issued', materialIssued,
+    r => `<tr><td>${r.issueNo ?? ''}</td>${dateTd(r.issueDate)}<td>${r.sjoNo ?? ''}</td><td>${r.statusCode ?? ''}</td></tr>`, 4);
+  tableSummary('prod-material-issued-summary', materialIssued, null, 'issue', null);
+
+  fillTable('table-prod-ready', readyWorkOrders,
+    r => `<tr><td>${r.woNo ?? ''}</td><td>${(r.itemCode || '').trim()}</td>${numTd(r.orderedQty)}${numTd(r.receivedQty)}${dateTd(r.readyDate)}</tr>`, 5);
+  tableSummary('prod-ready-summary', readyWorkOrders, null, 'work order', null);
 }
 
 const loaders = {
@@ -524,9 +992,14 @@ document.getElementById('crm-filter-clear').addEventListener('click', clearCrmMo
 document.getElementById('lineage-search-btn').addEventListener('click', lineageSearchSubmit);
 document.getElementById('lineage-clear-btn').addEventListener('click', lineageClearSearch);
 document.getElementById('lineage-month-filter-clear').addEventListener('click', clearLineageMonth);
+document.getElementById('finance-month-filter-clear').addEventListener('click', clearFinanceMonth);
+document.getElementById('purchase-month-filter-clear').addEventListener('click', clearPurchaseMonth);
+document.getElementById('prod-month-filter-clear').addEventListener('click', clearProdMonth);
 document.getElementById('lineage-search').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') lineageSearchSubmit();
 });
+
+document.querySelectorAll('.data-table').forEach(t => { initSortableTable(t); initTablePagination(t); });
 
 checkHealth();
 activateModule('crm');

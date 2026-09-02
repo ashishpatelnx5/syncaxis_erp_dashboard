@@ -237,6 +237,54 @@
           </table>
         </div>
       </div>
+      <div class="crm-fy-bar">
+        <label for="purchase-fy-select">Financial year</label>
+        <select id="purchase-fy-select"></select>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="purchase-breakdown-title">Monthly breakdown <span class="muted">(click a month row to filter the bill list below)</span></h3>
+          <div class="table-summary" id="purchase-breakdown-summary"></div>
+          <table class="data-table" id="table-purchase-monthly-breakdown">
+            <thead><tr><th>Month</th><th>Bills</th><th>Spend</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="crm-filter-bar" id="purchase-month-filter-bar" hidden>
+        Showing: <strong id="purchase-month-filter-label"></strong>
+        <button id="purchase-month-filter-clear" class="btn-link">Show most recent instead</button>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="purchase-bill-detail-title">Recent purchase bills</h3>
+          <div class="table-summary" id="purchase-bill-detail-summary"></div>
+          <table class="data-table" id="table-purchase-bill-detail">
+            <thead><tr><th>Bill No.</th><th>Vendor Bill No.</th><th>Vendor</th><th>Date</th><th>Amount</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3>Recent purchase orders</h3>
+          <div class="table-summary" id="purchase-orders-summary"></div>
+          <table class="data-table" id="table-purchase-orders">
+            <thead><tr><th>PO No.</th><th>Vendor</th><th>Order Date</th><th>Order Value</th><th>Received Value</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3>Material received (GRN)</h3>
+          <div class="table-summary" id="purchase-grn-summary"></div>
+          <table class="data-table" id="table-purchase-grn">
+            <thead><tr><th>GRN No.</th><th>PO No.</th><th>Vendor</th><th>Receipt Date</th><th>Vendor Challan No.</th><th>Challan Date</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- ===================== INVENTORY ===================== -->
@@ -271,6 +319,31 @@
           </table>
         </div>
       </div>
+      <div class="crm-fy-bar">
+        <label for="inv-fy-select">Financial year</label>
+        <select id="inv-fy-select"></select>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="inv-breakdown-title">Monthly stock activity — Received &rarr; Issued &rarr; Produced</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Document counts, not quantities — items are measured in different units (kg, pcs, m…), so summing raw quantities across them wouldn't be meaningful. Full receipt/issue detail lists are on the Purchase &amp; Vendors and Production &amp; WOs panels.</p>
+          <div class="table-summary" id="inv-breakdown-summary"></div>
+          <table class="data-table" id="table-inv-monthly-breakdown">
+            <thead><tr><th>Month</th><th>Received (GRN)</th><th>Issued</th><th>Produced</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3>Recent production receipts</h3>
+          <div class="table-summary" id="inv-production-receipts-summary"></div>
+          <table class="data-table" id="table-inv-production-receipts">
+            <thead><tr><th>Work Order No.</th><th>Item</th><th>Receipt Date</th><th>Receipt Qty</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- ===================== FINANCE ===================== -->
@@ -293,6 +366,54 @@
         <div class="card">
           <h3>Receivables aging</h3>
           <canvas id="chart-aging"></canvas>
+        </div>
+      </div>
+      <div class="crm-fy-bar">
+        <label for="finance-fy-select">Financial year</label>
+        <select id="finance-fy-select"></select>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="finance-breakdown-title">Monthly breakdown — amounts due <span class="muted">(click a month row to filter the tables below)</span></h3>
+          <div class="table-summary" id="finance-breakdown-summary"></div>
+          <table class="data-table" id="table-finance-monthly-breakdown">
+            <thead><tr><th>Month</th><th>Receivable due</th><th>Receivable entries</th><th>Payable due</th><th>Payable entries</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="crm-filter-bar" id="finance-month-filter-bar" hidden>
+        Showing: <strong id="finance-month-filter-label"></strong>
+        <button id="finance-month-filter-clear" class="btn-link">Show current outstanding instead</button>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="finance-debtors-title">Debtors — outstanding receivable by customer</h3>
+          <div class="table-summary" id="finance-debtors-summary"></div>
+          <table class="data-table" id="table-debtors">
+            <thead><tr><th>Customer</th><th>Outstanding</th><th>Oldest due date</th><th>Days overdue</th><th>Entries</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="finance-creditors-title">Creditors — outstanding payable by vendor</h3>
+          <div class="table-summary" id="finance-creditors-summary"></div>
+          <table class="data-table" id="table-creditors">
+            <thead><tr><th>Vendor</th><th>Outstanding</th><th>Oldest due date</th><th>Days overdue</th><th>Entries</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="finance-purchase-bills-title">Recent purchase bills (expenses)</h3>
+          <div class="table-summary" id="finance-purchase-bills-summary"></div>
+          <table class="data-table" id="table-purchase-bills">
+            <thead><tr><th>Bill No.</th><th>Vendor Bill No.</th><th>Vendor</th><th>Date</th><th>Amount</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -321,6 +442,64 @@
         <div class="card">
           <h3>Shop Job Orders by status code</h3>
           <canvas id="chart-sjo-status"></canvas>
+        </div>
+      </div>
+      <div class="crm-fy-bar">
+        <label for="prod-fy-select">Financial year</label>
+        <select id="prod-fy-select"></select>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="prod-breakdown-title">Monthly breakdown — OAF &rarr; Work Order &rarr; Material Issued &rarr; Ready <span class="muted">(click a month row to filter the tables below)</span></h3>
+          <div class="table-summary" id="prod-breakdown-summary"></div>
+          <table class="data-table" id="table-prod-monthly-breakdown">
+            <thead><tr><th>Month</th><th>OAFs</th><th>Work Orders</th><th>Material Issued</th><th>Ready</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="crm-filter-bar" id="prod-month-filter-bar" hidden>
+        Showing: <strong id="prod-month-filter-label"></strong>
+        <button id="prod-month-filter-clear" class="btn-link">Show most recent instead</button>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="prod-oafs-title">Recent Order Acceptance Forms (OAF)</h3>
+          <div class="table-summary" id="prod-oafs-summary"></div>
+          <table class="data-table" id="table-prod-oafs">
+            <thead><tr><th>OAF No.</th><th>Date</th><th>SO No.</th><th>Customer</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="prod-work-orders-title">Recent Work Orders</h3>
+          <div class="table-summary" id="prod-work-orders-summary"></div>
+          <table class="data-table" id="table-prod-work-orders">
+            <thead><tr><th>WO No.</th><th>Item</th><th>Order Date</th><th>Due Date</th><th>Ordered Qty</th><th>Received Qty</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="prod-material-issued-title">Recent material issued</h3>
+          <div class="table-summary" id="prod-material-issued-summary"></div>
+          <table class="data-table" id="table-prod-material-issued">
+            <thead><tr><th>Issue No.</th><th>Issue Date</th><th>SJO No.</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="prod-ready-title">Ready (fully received work orders)</h3>
+          <div class="table-summary" id="prod-ready-summary"></div>
+          <table class="data-table" id="table-prod-ready">
+            <thead><tr><th>WO No.</th><th>Item</th><th>Ordered Qty</th><th>Received Qty</th><th>Ready Date</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
     </section>

@@ -256,6 +256,35 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.data-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 16px;
+}
+
+.data-table th.sortable:hover {
+  color: var(--text);
+}
+
+.data-table th.sortable::after {
+  content: '\2195';
+  position: absolute;
+  right: 4px;
+  opacity: 0.35;
+  font-size: 11px;
+}
+
+.data-table th.sortable.sort-asc::after {
+  content: '\2191';
+  opacity: 1;
+}
+
+.data-table th.sortable.sort-desc::after {
+  content: '\2193';
+  opacity: 1;
+}
+
 .data-table td {
   padding: 7px 8px;
   border-bottom: 1px solid var(--border);
@@ -276,6 +305,63 @@ body {
   padding: 20px;
 }
 
+.data-table tbody tr[hidden] {
+  display: none;
+}
+
+.table-summary {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: -4px 0 10px;
+}
+
+.table-summary strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.table-pagination {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 2px 2px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.page-size-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-size-select {
+  font-family: var(--font);
+  font-size: 12.5px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 4px;
+  background: var(--surface);
+}
+
+.table-pagination .page-info {
+  margin-left: auto;
+}
+
+.page-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.table-pagination .btn-link:disabled {
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: default;
+  opacity: 0.5;
+}
+
 /* ---------- CRM month drill-down ---------- */
 #table-crm-monthly-breakdown tbody tr,
 #table-lineage-monthly-breakdown tbody tr {
@@ -283,13 +369,19 @@ body {
 }
 
 #table-crm-monthly-breakdown tbody tr.selected,
-#table-lineage-monthly-breakdown tbody tr.selected {
+#table-lineage-monthly-breakdown tbody tr.selected,
+#table-finance-monthly-breakdown tbody tr.selected,
+#table-purchase-monthly-breakdown tbody tr.selected,
+#table-prod-monthly-breakdown tbody tr.selected {
   background: var(--steel);
   color: #fff;
 }
 
 #table-crm-monthly-breakdown tbody tr.selected td,
-#table-lineage-monthly-breakdown tbody tr.selected td {
+#table-lineage-monthly-breakdown tbody tr.selected td,
+#table-finance-monthly-breakdown tbody tr.selected td,
+#table-purchase-monthly-breakdown tbody tr.selected td,
+#table-prod-monthly-breakdown tbody tr.selected td {
   border-bottom-color: var(--steel);
 }
 

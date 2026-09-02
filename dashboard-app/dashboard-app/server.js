@@ -144,20 +144,74 @@ app.get('/api/lineage/order/:id', async (req, res) => {
 app.get('/api/purchase/summary', (req, res) => runQuery(res, queries.purchase.summary));
 app.get('/api/purchase/trend', (req, res) => runQuery(res, queries.purchase.trend));
 app.get('/api/purchase/top-vendors', (req, res) => runQuery(res, queries.purchase.topVendors));
+app.get('/api/purchase/monthly-breakdown', (req, res) => {
+  const fy = parseFYRange(req.query.fy);
+  runQuery(res, queries.purchase.monthlyBreakdown, { start: fy.start, end: fy.end });
+});
+app.get('/api/purchase/bills', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.purchase.bills(!!range), range && { start: range.start, end: range.end });
+});
+app.get('/api/purchase/orders', (req, res) => runQuery(res, queries.purchase.orders));
+app.get('/api/purchase/material-received', (req, res) => runQuery(res, queries.purchase.materialReceived));
 
 // ---------- Inventory ----------
 app.get('/api/inventory/summary', (req, res) => runQuery(res, queries.inventory.summary));
 app.get('/api/inventory/low-stock', (req, res) => runQuery(res, queries.inventory.lowStock));
 app.get('/api/inventory/top-items', (req, res) => runQuery(res, queries.inventory.topItemsByStock));
+app.get('/api/inventory/monthly-breakdown', (req, res) => {
+  const fy = parseFYRange(req.query.fy);
+  runQuery(res, queries.inventory.monthlyBreakdown, { start: fy.start, end: fy.end });
+});
+app.get('/api/inventory/production-receipts', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.inventory.productionReceipts(!!range), range && { start: range.start, end: range.end });
+});
 
 // ---------- Finance ----------
 app.get('/api/finance/summary', (req, res) => runQuery(res, queries.finance.summary));
 app.get('/api/finance/aging', (req, res) => runQuery(res, queries.finance.aging));
+app.get('/api/finance/monthly-breakdown', (req, res) => {
+  const fy = parseFYRange(req.query.fy);
+  runQuery(res, queries.finance.monthlyBreakdown, { start: fy.start, end: fy.end });
+});
+app.get('/api/finance/debtors', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.finance.debtors(!!range), range && { start: range.start, end: range.end });
+});
+app.get('/api/finance/creditors', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.finance.creditors(!!range), range && { start: range.start, end: range.end });
+});
+app.get('/api/finance/purchase-bills', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.purchase.bills(!!range), range && { start: range.start, end: range.end });
+});
 
 // ---------- Production ----------
 app.get('/api/production/summary', (req, res) => runQuery(res, queries.production.summary));
 app.get('/api/production/wo-status', (req, res) => runQuery(res, queries.production.statusBreakdown));
 app.get('/api/production/sjo-status', (req, res) => runQuery(res, queries.production.sjoStatus));
+app.get('/api/production/monthly-breakdown', (req, res) => {
+  const fy = parseFYRange(req.query.fy);
+  runQuery(res, queries.production.monthlyBreakdown, { start: fy.start, end: fy.end });
+});
+app.get('/api/production/oafs', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.production.oafs(!!range), range && { start: range.start, end: range.end });
+});
+app.get('/api/production/work-orders', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.production.workOrders(!!range), range && { start: range.start, end: range.end });
+});
+app.get('/api/production/material-issued', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.production.materialIssued(!!range), range && { start: range.start, end: range.end });
+});
+app.get('/api/production/ready-work-orders', (req, res) => {
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.production.readyWorkOrders(!!range), range && { start: range.start, end: range.end });
+});
 
 // Health check — quick way to confirm the DB connection works at all
 app.get('/api/health', async (req, res) => {

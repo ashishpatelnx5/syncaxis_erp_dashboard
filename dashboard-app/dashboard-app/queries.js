@@ -84,6 +84,113 @@ const queries = {
       WHERE b.XBHDOCDT >= DATEADD(MONTH, -12, GETDATE())
       GROUP BY v.MVmName
       ORDER BY totalSpend DESC;
+    `,
+    // Indian FY-bound monthly breakdown, same always-12-rows shape as
+    // crm.monthlyBreakdown — bill count + spend per month, grouped by
+    // XBHDOCDT (the bill's own doc date, same field summary/trend/topVendors
+    // above already use).
+    monthlyBreakdown: `
+      WITH Months AS (
+        SELECT TOP 12 FORMAT(DATEADD(MONTH, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @start), 'yyyy-MM') AS period
+        FROM sys.all_objects
+      ),
+      Bills AS (
+        SELECT FORMAT(XBHDOCDT, 'yyyy-MM') AS period, COUNT(*) AS billCount, SUM(XBHACTBILLAMT) AS spend
+        FROM XPURBILLHDR
+        WHERE XBHDOCDT >= @start AND XBHDOCDT < @end
+        GROUP BY FORMAT(XBHDOCDT, 'yyyy-MM')
+      )
+      SELECT m.period, ISNULL(b.billCount, 0) AS billCount, ISNULL(b.spend, 0) AS spend
+      FROM Months m
+      LEFT JOIN Bills b ON m.period = b.period
+      ORDER BY m.period;
+    `,
+    // Bill-level detail report (the Purchase & Vendors equivalent of CRM's
+    // recent-* tables). Same `filtered` pattern: false = most recent 50
+    // overall, true = every bill in the caller's @start/@end month range
+    // (used when a month row is clicked in monthlyBreakdown above).
+    // Internal bill number is assembled from XBHYEAR/XBHGRP/XBHNO (there is
+    // no single XBHBILLNO column) — same "internal doc no. assembled from
+    // year/group/sequence" pattern used for sales orders elsewhere in this
+    // file. XBHVNDBILLNO is the vendor's own bill reference (the payable-side
+    // equivalent of a customer PO number). Verified against live columns.
+    // Also used by the Finance panel's "Expenses" section (see finance's
+    // /api/finance/purchase-bills route in server.js, which calls this same
+    // query) — kept in one place so both panels stay consistent.
+    bills: (filtered) => `
+      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+        b.XBHAUTOID AS billId,
+        CONCAT(b.XBHYEAR, '/', b.XBHGRP, '/', b.XBHNO) AS billNo,
+        b.XBHVNDBILLNO AS vendorBillNo,
+        v.MVmName AS vendorName,
+        b.XBHDOCDT AS billDate,
+        b.XBHACTBILLAMT AS billAmount,
+        b.XBHSTATUS AS statusCode
+      FROM XPURBILLHDR b
+      LEFT JOIN MVNDMAST v ON b.XBHVNDCD = v.MVmVndCode
+      ${filtered ? 'WHERE b.XBHDOCDT >= @start AND b.XBHDOCDT < @end' : ''}
+      ORDER BY b.XBHDOCDT DESC;
+    `,
+    // Purchase Order report. RFQ (XPURINQHDR) and vendor quotation
+    // (XPURQTNHDR) — the two stages that would normally precede a PO — are
+    // NOT included here: both tables have 0 rows in this database, so
+    // SYNCAXIS isn't using that workflow; a report on them would always be
+    // empty. POHSTATUS labels ARE verified (unlike the same-shaped guess on
+    // sales XOBORDSTAT): 'C' correlates 100% with a populated POHCLOSDT AND
+    // a linked GRN across all 404 'C' rows, so it means fully closed/received,
+    // not merely "confirmed". 'O'/'N' overwhelmingly have no GRN yet.
+    // POHRCPVAL (received value so far) is populated and included; POHINVVAL/
+    // POHPAIDVAL are NULL on every row in this data, so left out.
+    orders: `
+      SELECT TOP 50
+        p.POHAUTOID AS poId,
+        CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo,
+        v.MVmName AS vendorName,
+        p.POHORDDT AS orderDate,
+        p.POHNETVAL AS orderValue,
+        p.POHRCPVAL AS receivedValue,
+        p.POHSTATUS AS statusCode,
+        CASE p.POHSTATUS
+          WHEN 'C' THEN 'Closed'
+          WHEN 'O' THEN 'Open'
+          WHEN 'N' THEN 'New'
+          WHEN 'D' THEN 'Cancelled'
+          ELSE p.POHSTATUS
+        END AS statusLabel
+      FROM XPOHEAD p
+      LEFT JOIN MVNDMAST v ON p.POHVNDCODE = v.MVmVndCode
+      ORDER BY p.POHORDDT DESC;
+    `,
+    // Material Received (GRN) report, with the PO number it was received
+    // against. GRN -> PO link is at the line level (XGRNDTL.XGRNDPOID ->
+    // XPOHEAD.POHAUTOID) — verified every one of the 650 GRNs in this data
+    // links to exactly one distinct PO across all its lines (never more than
+    // one), so a single OUTER APPLY TOP 1 is safe, same pattern used for
+    // order->invoice lookups elsewhere in this file. XGRNHSTATUS meaning is
+    // a guess (only 'O'/641 rows and 'D'/9 rows seen, no downstream link to
+    // cross-check against) — 'O' does NOT mean "not yet received": a GRN
+    // record only exists once goods are physically receipted, so 'O' more
+    // likely reflects the record's own open/not-yet-billed state.
+    materialReceived: `
+      SELECT TOP 50
+        h.XGRNHAUTOID AS grnId,
+        CONCAT(h.XGRNHORDYR, '/', h.XGRNHGRPCD, '/', h.XGRNHORDNO) AS grnNo,
+        po.poNo,
+        v.MVmName AS vendorName,
+        h.XGRNHORDDT AS receiptDate,
+        h.XGRNHCHALNO AS vendorChallanNo,
+        h.XGRNHCHALDT AS vendorChallanDate,
+        h.XGRNHSTATUS AS statusCode,
+        CASE h.XGRNHSTATUS WHEN 'O' THEN 'Open' WHEN 'D' THEN 'Cancelled' ELSE h.XGRNHSTATUS END AS statusLabel
+      FROM XGRNHDR h
+      LEFT JOIN MVNDMAST v ON h.XGRNHVNDCD = v.MVmVndCode
+      OUTER APPLY (
+        SELECT TOP 1 CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo
+        FROM XGRNDTL d
+        JOIN XPOHEAD p ON p.POHAUTOID = d.XGRNDPOID
+        WHERE d.XGRNDAUTOID = h.XGRNHAUTOID
+      ) po
+      ORDER BY h.XGRNHORDDT DESC;
     `
   },
 
@@ -122,6 +229,67 @@ const queries = {
       JOIN MITMMAST m ON si.XSIITMCD = m.MIMITMICOD
       GROUP BY m.MIMITMICOD, m.MIMNAME
       ORDER BY qtyOnHand DESC;
+    `,
+    // Monthly stock ACTIVITY (movement document counts), Indian FY-bound,
+    // same always-12-rows shape used everywhere else. XSTKONHAND is only a
+    // current balance with no history, so a month-by-month "stock level"
+    // report isn't possible from this data — this instead shows how many
+    // movement documents happened each month: Received (GRN) -> Issued (to
+    // production) -> Produced (finished goods receipted back into stock).
+    // Counts, not summed quantities: XGRNDTL/XISSDTL/XWORCPHDR lines cover
+    // many different items in different units (kg, pcs, m...), so summing
+    // raw quantities across them would be meaningless — same reasoning
+    // already applied to the GRN and Material Issued tables elsewhere.
+    // "Despatched" was considered as a fourth stage and dropped: the plain
+    // delivery-challan table (XDCHDR) has only 17 rows in the ENTIRE
+    // database — most despatch in this data happens via the combined
+    // despatch-cum-invoice document instead (see Sales & CRM panels), so a
+    // monthly delivery-challan count would misleadingly read as ~0 nearly
+    // every month.
+    monthlyBreakdown: `
+      WITH Months AS (
+        SELECT TOP 12 FORMAT(DATEADD(MONTH, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @start), 'yyyy-MM') AS period
+        FROM sys.all_objects
+      ),
+      Received AS (
+        SELECT FORMAT(XGRNHORDDT, 'yyyy-MM') AS period, COUNT(*) AS receivedCount
+        FROM XGRNHDR WHERE XGRNHORDDT >= @start AND XGRNHORDDT < @end
+        GROUP BY FORMAT(XGRNHORDDT, 'yyyy-MM')
+      ),
+      Issued AS (
+        SELECT FORMAT(XIHISSDT, 'yyyy-MM') AS period, COUNT(*) AS issuedCount
+        FROM XISSHDR WHERE XIHSJOWOTYP = 'S' AND XIHISSDT >= @start AND XIHISSDT < @end
+        GROUP BY FORMAT(XIHISSDT, 'yyyy-MM')
+      ),
+      Produced AS (
+        SELECT FORMAT(XWRHWODT, 'yyyy-MM') AS period, COUNT(*) AS producedCount
+        FROM XWORCPHDR WHERE XWRHWODT >= @start AND XWRHWODT < @end
+        GROUP BY FORMAT(XWRHWODT, 'yyyy-MM')
+      )
+      SELECT
+        m.period,
+        ISNULL(r.receivedCount, 0) AS receivedCount,
+        ISNULL(i.issuedCount, 0) AS issuedCount,
+        ISNULL(p.producedCount, 0) AS producedCount
+      FROM Months m
+      LEFT JOIN Received r ON m.period = r.period
+      LEFT JOIN Issued i ON m.period = i.period
+      LEFT JOIN Produced p ON m.period = p.period
+      ORDER BY m.period;
+    `,
+    // Production receipts: finished/processed items received back into
+    // stock (the "Produced" stage above). Not shown anywhere else in the app.
+    productionReceipts: (filtered) => `
+      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+        w.XWRHAUTOID AS receiptId,
+        w.XWRHWONO AS workOrderNo,
+        w.XWRHITMCD AS itemCode,
+        w.XWRHWODT AS receiptDate,
+        w.XWRHRCPQTY AS receiptQty,
+        w.XWRHSTATUS AS statusCode
+      FROM XWORCPHDR w
+      ${filtered ? 'WHERE w.XWRHWODT >= @start AND w.XWRHWODT < @end' : ''}
+      ORDER BY w.XWRHWODT DESC;
     `
   },
 
@@ -157,7 +325,95 @@ const queries = {
           ELSE '4. 90+ days'
         END
       ORDER BY bucket;
-    `
+    `,
+    // Monthly breakdown, Indian FY-bound, same always-12-rows shape as
+    // crm.monthlyBreakdown / lineage.monthlyBreakdown. Grouped by
+    // XOH_DUE_DATE, NOT a "raised this month" date — XOH_BILLDATE (which
+    // would give that) is NULL on all 1999 rows in this database, unusable.
+    // XOUTSTNDHDR only holds CURRENTLY outstanding items (already-settled
+    // ones aren't in it), so this is a forward/backward-looking view of
+    // when today's outstanding balance falls due, not a historical activity
+    // trend — a customer whose invoice was raised last year but is still
+    // unpaid shows up in whatever month its due date falls in, which may be
+    // in the past (still-overdue) or ahead in this FY.
+    monthlyBreakdown: `
+      WITH Months AS (
+        SELECT TOP 12 FORMAT(DATEADD(MONTH, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @start), 'yyyy-MM') AS period
+        FROM sys.all_objects
+      ),
+      Outstanding AS (
+        SELECT
+          FORMAT(XOH_DUE_DATE, 'yyyy-MM') AS period,
+          SUM(CASE WHEN XOH_DR_CR = 'D' THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END) AS receivableDue,
+          SUM(CASE WHEN XOH_DR_CR = 'C' THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END) AS payableDue,
+          SUM(CASE WHEN XOH_DR_CR = 'D' THEN 1 ELSE 0 END) AS receivableCount,
+          SUM(CASE WHEN XOH_DR_CR = 'C' THEN 1 ELSE 0 END) AS payableCount
+        FROM XOUTSTNDHDR
+        WHERE XOH_DUE_DATE >= @start AND XOH_DUE_DATE < @end
+        GROUP BY FORMAT(XOH_DUE_DATE, 'yyyy-MM')
+      )
+      SELECT
+        m.period,
+        ISNULL(o.receivableDue, 0) AS receivableDue,
+        ISNULL(o.payableDue, 0) AS payableDue,
+        ISNULL(o.receivableCount, 0) AS receivableCount,
+        ISNULL(o.payableCount, 0) AS payableCount
+      FROM Months m
+      LEFT JOIN Outstanding o ON m.period = o.period
+      ORDER BY m.period;
+    `,
+    // Debtors report: customer-wise outstanding receivable, one row per
+    // customer, with the oldest due date in that balance driving the aging
+    // bucket (so a customer with any old overdue item shows as overdue even
+    // if their balance also includes fresh, not-yet-due entries).
+    // XOH_ACCCD -> MCMCUSTCD: same join already relied on by lineage.customerAR
+    // (account-level receivable for a specific order's customer), so this is
+    // not a new assumption. Rows where the balance nets to ~0 are dropped.
+    // `filtered` (true when the caller clicked a month in the Finance
+    // monthly breakdown table): restricts to entries whose due date falls in
+    // the caller's @start/@end month, and the aggregates (amount, oldest due
+    // date, entry count) are then scoped to just that month's entries — i.e.
+    // "what this customer owes that's due in month X", not their full balance.
+    debtors: (filtered) => `
+      SELECT
+        ISNULL(c.MCMCUSTNM, o.XOH_ACCCD) AS customerName,
+        o.XOH_ACCCD AS customerCode,
+        SUM(o.XOH_TRN_AMT_DOM - o.XOH_ADJ_AMT_DOM) AS outstandingAmount,
+        MIN(o.XOH_DUE_DATE) AS oldestDueDate,
+        DATEDIFF(DAY, MIN(o.XOH_DUE_DATE), GETDATE()) AS daysOverdue,
+        COUNT(*) AS entryCount
+      FROM XOUTSTNDHDR o
+      LEFT JOIN MCUSTMST c ON o.XOH_ACCCD = c.MCMCUSTCD
+      WHERE o.XOH_DR_CR = 'D'
+      ${filtered ? 'AND o.XOH_DUE_DATE >= @start AND o.XOH_DUE_DATE < @end' : ''}
+      GROUP BY o.XOH_ACCCD, c.MCMCUSTNM
+      HAVING ABS(SUM(o.XOH_TRN_AMT_DOM - o.XOH_ADJ_AMT_DOM)) > 0.01
+      ORDER BY outstandingAmount DESC;
+    `,
+    // Creditors report: vendor-wise outstanding payable, mirrors debtors above.
+    // XOH_ACCCD -> MVmVndCode is UNVERIFIED (no existing query in this file
+    // joins XOUTSTNDHDR to MVNDMAST) — if vendorName comes back as the raw
+    // account code for most/all rows, the account-code namespace likely
+    // doesn't line up 1:1 with MVmVndCode; see diagnostics.sql query 10.
+    creditors: (filtered) => `
+      SELECT
+        ISNULL(v.MVmName, o.XOH_ACCCD) AS vendorName,
+        o.XOH_ACCCD AS vendorCode,
+        SUM(o.XOH_TRN_AMT_DOM - o.XOH_ADJ_AMT_DOM) AS outstandingAmount,
+        MIN(o.XOH_DUE_DATE) AS oldestDueDate,
+        DATEDIFF(DAY, MIN(o.XOH_DUE_DATE), GETDATE()) AS daysOverdue,
+        COUNT(*) AS entryCount
+      FROM XOUTSTNDHDR o
+      LEFT JOIN MVNDMAST v ON o.XOH_ACCCD = v.MVmVndCode
+      WHERE o.XOH_DR_CR = 'C'
+      ${filtered ? 'AND o.XOH_DUE_DATE >= @start AND o.XOH_DUE_DATE < @end' : ''}
+      GROUP BY o.XOH_ACCCD, v.MVmName
+      HAVING ABS(SUM(o.XOH_TRN_AMT_DOM - o.XOH_ADJ_AMT_DOM)) > 0.01
+      ORDER BY outstandingAmount DESC;
+    `,
+    // Expenses: full purchase-bill list — see queries.purchase.bills (shared
+    // with the Purchase & Vendors panel's own bill-detail report, so both
+    // stay consistent instead of maintaining two copies of the same query).
   },
 
   // ---------------- CRM: ENQUIRY -> QUOTATION -> SALES ORDER -> FOLLOW-UP ----------------
@@ -638,6 +894,119 @@ const queries = {
       FROM XSJOHDR
       GROUP BY XSHSJOSTAT
       ORDER BY count DESC;
+    `,
+    // ---- Production pipeline: OAF -> Work Order -> Material Issued ->
+    // Ready (fully received) ----
+    // Same shape as CRM Pipeline (crm.monthlyBreakdown / recentEnquiries etc)
+    // but for the production side. Purchase Order was considered as a fifth
+    // stage but dropped: POHOAFID (PO -> OAF link) is populated with a real
+    // OAF reference on only 3 of 451 POs — mostly it's just 0, not a
+    // meaningful production-job link. PO reporting stays in the Purchase &
+    // Vendors panel instead. Every remaining stage's own date field, verified:
+    //   OAF: XOAFHDATE.
+    //   Work Order: XWODT.
+    //   Material Issued: XIHISSDT, filtered to XIHSJOWOTYP = 'S' (issues
+    //   against a Shop Job Order) — same filter Order Lineage's storeIssues
+    //   query already uses; no 'W' (direct-to-WO) issues exist in this data.
+    //   Ready = Work Order fully received (XWOQTYRECV >= XWOQTYORD, guarded
+    //   by XWOQTYORD > 0). Verified ALL 483 fully-received work orders also
+    //   have XWOCLOSDT populated (100% correlation), so XWOCLOSDT is used as
+    //   the "became ready" date for monthly bucketing.
+    monthlyBreakdown: `
+      WITH Months AS (
+        SELECT TOP 12 FORMAT(DATEADD(MONTH, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @start), 'yyyy-MM') AS period
+        FROM sys.all_objects
+      ),
+      Oaf AS (
+        SELECT FORMAT(XOAFHDATE, 'yyyy-MM') AS period, COUNT(*) AS oafCount
+        FROM XOAFHDR WHERE XOAFHDATE >= @start AND XOAFHDATE < @end
+        GROUP BY FORMAT(XOAFHDATE, 'yyyy-MM')
+      ),
+      Wo AS (
+        SELECT FORMAT(XWODT, 'yyyy-MM') AS period, COUNT(*) AS woCount
+        FROM XWOHDR WHERE XWODT >= @start AND XWODT < @end
+        GROUP BY FORMAT(XWODT, 'yyyy-MM')
+      ),
+      Issue AS (
+        SELECT FORMAT(XIHISSDT, 'yyyy-MM') AS period, COUNT(*) AS issueCount
+        FROM XISSHDR WHERE XIHSJOWOTYP = 'S' AND XIHISSDT >= @start AND XIHISSDT < @end
+        GROUP BY FORMAT(XIHISSDT, 'yyyy-MM')
+      ),
+      Ready AS (
+        SELECT FORMAT(XWOCLOSDT, 'yyyy-MM') AS period, COUNT(*) AS readyCount
+        FROM XWOHDR
+        WHERE XWOQTYORD > 0 AND XWOQTYRECV >= XWOQTYORD AND XWOCLOSDT >= @start AND XWOCLOSDT < @end
+        GROUP BY FORMAT(XWOCLOSDT, 'yyyy-MM')
+      )
+      SELECT
+        m.period,
+        ISNULL(o.oafCount, 0) AS oafCount,
+        ISNULL(w.woCount, 0) AS woCount,
+        ISNULL(i.issueCount, 0) AS issueCount,
+        ISNULL(r.readyCount, 0) AS readyCount
+      FROM Months m
+      LEFT JOIN Oaf o ON m.period = o.period
+      LEFT JOIN Wo w ON m.period = w.period
+      LEFT JOIN Issue i ON m.period = i.period
+      LEFT JOIN Ready r ON m.period = r.period
+      ORDER BY m.period;
+    `,
+    oafs: (filtered) => `
+      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+        oaf.XOAFHAUTOID AS oafId,
+        CONCAT(oaf.XOAFHYEAR, '/', oaf.XOAFHGRPCD, '/', oaf.XOAFHNO) AS oafNo,
+        oaf.XOAFHDATE AS oafDate,
+        CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS syncaxisOrderNo,
+        c.MCMCUSTNM AS customerName
+      FROM XOAFHDR oaf
+      LEFT JOIN XORDDTL o ON o.XOBAUTOID = oaf.XOAFHORDID
+      LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
+      ${filtered ? 'WHERE oaf.XOAFHDATE >= @start AND oaf.XOAFHDATE < @end' : ''}
+      ORDER BY oaf.XOAFHDATE DESC;
+    `,
+    workOrders: (filtered) => `
+      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+        w.XWOAUTOID AS woId,
+        CONCAT(w.XWOYR, '/', w.XWOGRCD, '/', w.XWONO) AS woNo,
+        w.XWOITMCD AS itemCode,
+        w.XWODT AS orderDate,
+        w.XWODUEDT AS dueDate,
+        w.XWOQTYORD AS orderedQty,
+        w.XWOQTYRECV AS receivedQty,
+        w.XWOSTATUS AS statusCode,
+        w.XWOCLOSDT AS closedDate
+      FROM XWOHDR w
+      ${filtered ? 'WHERE w.XWODT >= @start AND w.XWODT < @end' : ''}
+      ORDER BY w.XWODT DESC;
+    `,
+    // XIHSJOWOTYP = 'S' filter matches lineage.storeIssues — no 'W'-typed
+    // (direct-to-work-order) issues exist in this data, only SJO-linked ones.
+    materialIssued: (filtered) => `
+      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+        i.XIHAUTOID AS issueId,
+        i.XIHISSNO AS issueNo,
+        i.XIHISSDT AS issueDate,
+        CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo,
+        i.XIHSTATUS AS statusCode
+      FROM XISSHDR i
+      LEFT JOIN XSJOHDR s ON i.XIHDOCID = s.XSHSJAUTONO AND i.XIHSJOWOTYP = 'S'
+      WHERE i.XIHSJOWOTYP = 'S'
+      ${filtered ? 'AND i.XIHISSDT >= @start AND i.XIHISSDT < @end' : ''}
+      ORDER BY i.XIHISSDT DESC;
+    `,
+    // "Project ready" = fully received (see monthlyBreakdown comment above).
+    readyWorkOrders: (filtered) => `
+      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+        w.XWOAUTOID AS woId,
+        CONCAT(w.XWOYR, '/', w.XWOGRCD, '/', w.XWONO) AS woNo,
+        w.XWOITMCD AS itemCode,
+        w.XWOQTYORD AS orderedQty,
+        w.XWOQTYRECV AS receivedQty,
+        w.XWOCLOSDT AS readyDate
+      FROM XWOHDR w
+      WHERE w.XWOQTYORD > 0 AND w.XWOQTYRECV >= w.XWOQTYORD
+      ${filtered ? 'AND w.XWOCLOSDT >= @start AND w.XWOCLOSDT < @end' : ''}
+      ORDER BY w.XWOCLOSDT DESC;
     `
   }
 };
