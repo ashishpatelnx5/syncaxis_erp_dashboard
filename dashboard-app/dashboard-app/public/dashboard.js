@@ -174,6 +174,214 @@ async function loadCRM() {
     r => `<tr><td>${r.customerName ?? ''}</td><td>${r.basedOnLabel ?? r.basedOn ?? ''}</td><td>${r.nextFollowUpDate ? new Date(r.nextFollowUpDate).toLocaleDateString() : ''}</td><td>${r.salesperson ?? ''}</td><td>${r.remark ?? r.nextAgenda ?? ''}</td></tr>`, 5);
 }
 
+// ---------------- Order Lineage ----------------
+
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ''; }
+
+let lineageSelectedFY = currentFYStartYear();
+let lineageFYInitialized = false;
+let lineageSelectedMonth = null; // 'YYYY-MM', or null = no month filter
+
+function initLineageFYSelect() {
+  if (lineageFYInitialized) return;
+  lineageFYInitialized = true;
+  const select = document.getElementById('lineage-fy-select');
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.value = lineageSelectedFY;
+  select.addEventListener('change', () => {
+    lineageSelectedFY = Number(select.value);
+    refreshCurrent();
+  });
+}
+
+function selectLineageMonth(period) {
+  lineageSelectedMonth = period;
+  document.getElementById('lineage-search').value = '';
+  refreshCurrent();
+}
+
+function clearLineageMonth() {
+  lineageSelectedMonth = null;
+  refreshCurrent();
+}
+
+function lineageSearchSubmit() {
+  lineageSelectedMonth = null;
+  refreshCurrent();
+}
+
+function lineageClearSearch() {
+  document.getElementById('lineage-search').value = '';
+  lineageSelectedMonth = null;
+  refreshCurrent();
+}
+
+async function loadLineage() {
+  initLineageFYSelect();
+  const fyText = fyLabel(lineageSelectedFY);
+
+  const monthly = await fetchJSON('/api/lineage/monthly-breakdown?fy=' + lineageSelectedFY);
+  document.getElementById('lineage-breakdown-title').innerHTML =
+    `Monthly breakdown — ${fyText} <span class="muted">(click a month row to filter the order list below)</span>`;
+  fillTable('table-lineage-monthly-breakdown', monthly,
+    r => `<tr class="${r.period === lineageSelectedMonth ? 'selected' : ''}" onclick="selectLineageMonth('${r.period}')"><td>${r.period}</td><td>${fmtNum(r.orderCount)}</td><td class="num">${fmtMoney(r.orderValue)}</td></tr>`, 3);
+
+  const filterBar = document.getElementById('lineage-month-filter-bar');
+  filterBar.hidden = !lineageSelectedMonth;
+  document.getElementById('lineage-month-filter-label').textContent = lineageSelectedMonth ? crmMonthLabel(lineageSelectedMonth) : '';
+
+  await lineageSearch();
+
+  // Re-fetch the currently-open order's detail too, so the global Refresh
+  // button (and FY/month changes) actually refresh what's on screen instead
+  // of leaving stale data in the timeline below.
+  if (lineageCurrentOrderId) {
+    await loadLineageDetail(lineageCurrentOrderId);
+    document.querySelectorAll('#table-lineage-orders tbody tr').forEach(tr => {
+      tr.classList.toggle('selected', Number(tr.dataset.orderId) === lineageCurrentOrderId);
+    });
+  }
+}
+
+async function lineageSearch() {
+  const term = document.getElementById('lineage-search').value.trim();
+  const params = [];
+  if (term) params.push('search=' + encodeURIComponent(term));
+  if (lineageSelectedMonth) params.push('month=' + encodeURIComponent(lineageSelectedMonth));
+  const url = '/api/lineage/orders' + (params.length ? '?' + params.join('&') : '');
+  const orders = await fetchJSON(url);
+  fillTable('table-lineage-orders', orders,
+    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td><td>${fmtDate(r.orderDate)}</td><td class="num">${fmtMoney(r.orderValue)}</td><td>${r.statusCode ?? ''}</td></tr>`, 6);
+}
+
+function lineageStage(title, count, dotClass, bodyHtml) {
+  return `
+    <div class="lineage-stage">
+      <div class="lineage-stage-marker">
+        <div class="lineage-dot ${dotClass}"></div>
+        <div class="lineage-connector"></div>
+      </div>
+      <div class="lineage-stage-body">
+        <div class="lineage-stage-title">${title}${count != null ? `<span class="lineage-count-badge">${count}</span>` : ''}</div>
+        ${bodyHtml}
+      </div>
+    </div>`;
+}
+
+function lineageSubList(rowsHtml) {
+  if (!rowsHtml.length) return '';
+  return `<div class="lineage-sublist"><table><tbody>${rowsHtml.join('')}</tbody></table></div>`;
+}
+
+function renderLineageTimeline(data) {
+  const h = data.header;
+  if (!h) return '<div class="lineage-empty-note">Order not found.</div>';
+
+  const sjos = data.shopJobOrders || [];
+  const prod = data.production || [];
+  const issues = data.storeIssues || [];
+  const challans = data.despatchChallans || [];
+  const invoices = data.invoices || [];
+  const ar = data.customerAR || {};
+
+  let html = '';
+
+  html += lineageStage('Enquiry', null, h.enquiryId ? 'done' : 'empty',
+    h.enquiryId
+      ? `<div class="lineage-fact-row"><span class="muted">No.</span>${h.enquiryNo} <span class="muted">Date</span>${fmtDate(h.enquiryDate)}</div>`
+      : `<div class="lineage-empty-note">No enquiry on record — order created directly.</div>`);
+
+  html += lineageStage('Quotation', null, h.quotationId ? 'done' : 'empty',
+    h.quotationId
+      ? `<div class="lineage-fact-row"><span class="muted">No.</span>${h.quotationNo} <span class="muted">Date</span>${fmtDate(h.quotationDate)} <span class="muted">Value</span>${fmtMoney(h.quotationValue)}</div>`
+      : `<div class="lineage-empty-note">No quotation on record.</div>`);
+
+  html += lineageStage('Customer Order / Sales Order', null, 'done',
+    `<div class="lineage-fact-row"><span class="muted">SO No.</span>${h.syncaxisOrderNo} <span class="muted">Customer PO No.</span>${h.customerRefNo || '—'}</div>
+     <div class="lineage-fact-row"><span class="muted">Date</span>${fmtDate(h.orderDate)} <span class="muted">Value</span>${fmtMoney(h.orderValue)} <span class="muted">Status</span>${h.statusLabel}</div>
+     <div class="lineage-fact-row"><span class="muted">Customer</span>${h.customerName || ''} <span class="muted">Salesperson</span>${h.salesperson || '—'}</div>`);
+
+  html += lineageStage('Order Acceptance Form (OAF)', null, h.oafId ? 'done' : 'empty',
+    h.oafId
+      ? `<div class="lineage-fact-row"><span class="muted">No.</span>${h.oafNo} <span class="muted">Date</span>${fmtDate(h.oafDate)}</div>`
+      : `<div class="lineage-empty-note">No OAF on record.</div>`);
+
+  html += lineageStage('Manufacturing (Shop Job Orders)', sjos.length || null,
+    sjos.length ? (sjos.every(s => s.statusCode === 'F') ? 'done' : 'partial') : 'empty',
+    sjos.length
+      ? lineageSubList(sjos.map(s => `<tr><td>${s.sjoNo}</td><td>${(s.itemCode || '').trim()}</td><td>${fmtNum(s.orderedQty)}</td><td>${s.statusCode ?? ''}</td></tr>`))
+      : `<div class="lineage-empty-note">No manufacturing job triggered for this order.</div>`);
+
+  html += lineageStage('Work Order &amp; Production Receipt', prod.length || null,
+    prod.length ? (prod.every(p => p.statusCode === 'C') ? 'done' : 'partial') : 'empty',
+    prod.length
+      ? lineageSubList(prod.map(p => `<tr><td>${p.workOrderNo ?? ''}</td><td>${(p.itemCode || '').trim()}</td><td>${fmtNum(p.receivedQty)} / ${fmtNum(p.orderedQty)}</td><td>${p.statusCode ?? ''}</td></tr>`))
+      : `<div class="lineage-empty-note">No production receipt recorded yet.</div>`);
+
+  html += lineageStage('Store — Material Issued', issues.length || null, issues.length ? 'done' : 'empty',
+    issues.length
+      ? lineageSubList(issues.map(i => `<tr><td>${i.issueNo}</td><td>${fmtDate(i.issueDate)}</td><td>${i.sjoNo ?? ''}</td></tr>`))
+      : `<div class="lineage-empty-note">No material issued from store yet.</div>`);
+
+  html += lineageStage('Despatch', challans.length || null, challans.length ? 'done' : (invoices.length ? 'partial' : 'empty'),
+    challans.length
+      ? lineageSubList(challans.map(c => `<tr><td>${c.challanNo}</td><td>${fmtDate(c.challanDate)}</td><td>${c.statusCode ?? ''}</td></tr>`))
+      : (invoices.length
+          ? `<div class="lineage-empty-note">No separate delivery challan — despatched together with the invoice below.</div>`
+          : `<div class="lineage-empty-note">Not yet despatched.</div>`));
+
+  html += lineageStage('Invoice', invoices.length || null, invoices.length ? 'done' : 'empty',
+    invoices.length
+      ? lineageSubList(invoices.map(i => `<tr><td>${i.invoiceNo}</td><td>${fmtDate(i.invoiceDate)}</td><td class="num">${fmtMoney(i.invoiceValue)}</td><td>${i.statusCode ?? ''}</td></tr>`))
+      : `<div class="lineage-empty-note">Not yet invoiced.</div>`);
+
+  html += `
+    <div class="lineage-stage">
+      <div class="lineage-stage-marker">
+        <div class="lineage-dot ${ar.receivable > 0 ? 'partial' : 'done'}"></div>
+      </div>
+      <div class="lineage-stage-body">
+        <div class="lineage-stage-title">Financial Settlement</div>
+        <div class="lineage-fact-row"><span class="muted">Customer's overall outstanding receivable</span>${fmtMoney(ar.receivable)} <span class="muted">across</span>${fmtNum(ar.outstandingEntries)} <span class="muted">entries</span></div>
+        <div class="lineage-empty-note">Account-level balance for ${h.customerName ? h.customerName.trim() : 'this customer'} — not traceable to this specific invoice (no reliable per-invoice link found in the data).</div>
+      </div>
+    </div>`;
+
+  return html;
+}
+
+let lineageCurrentOrderId = null; // whichever order's detail is open, so Refresh/filter changes re-fetch it too
+
+async function loadLineageDetail(orderId) {
+  const wrap = document.getElementById('lineage-detail-wrap');
+  const timelineEl = document.getElementById('lineage-timeline');
+  wrap.hidden = false;
+  timelineEl.innerHTML = '<div class="lineage-empty-note">Loading…</div>';
+  document.getElementById('lineage-detail-title').textContent = 'Order Lineage — loading…';
+  try {
+    const data = await fetchJSON('/api/lineage/order/' + orderId);
+    document.getElementById('lineage-detail-title').textContent = data.header ? `Order Lineage — ${data.header.syncaxisOrderNo}` : 'Order Lineage';
+    timelineEl.innerHTML = renderLineageTimeline(data);
+  } catch (err) {
+    timelineEl.innerHTML = '<div class="lineage-empty-note">Failed to load lineage — see console.</div>';
+    console.error(err);
+  }
+}
+
+async function viewLineage(orderId) {
+  lineageCurrentOrderId = orderId;
+  document.querySelectorAll('#table-lineage-orders tbody tr').forEach(tr => {
+    tr.classList.toggle('selected', Number(tr.dataset.orderId) === orderId);
+  });
+  await loadLineageDetail(orderId);
+}
+
 async function loadSales() {
   const [summary, trend, topCustomers] = await Promise.all([
     fetchJSON('/api/sales/summary'),
@@ -256,6 +464,7 @@ async function loadProduction() {
 
 const loaders = {
   crm: loadCRM,
+  lineage: loadLineage,
   sales: loadSales,
   purchase: loadPurchase,
   inventory: loadInventory,
@@ -265,6 +474,7 @@ const loaders = {
 
 const titles = {
   crm: 'CRM Pipeline — Enquiry to Order',
+  lineage: 'Order Lineage — Enquiry to Despatch',
   sales: 'Sales & Revenue',
   purchase: 'Purchase & Vendors',
   inventory: 'Inventory & Stock',
@@ -311,6 +521,12 @@ document.querySelectorAll('.nav-item').forEach(btn => {
 });
 document.getElementById('refreshBtn').addEventListener('click', refreshCurrent);
 document.getElementById('crm-filter-clear').addEventListener('click', clearCrmMonth);
+document.getElementById('lineage-search-btn').addEventListener('click', lineageSearchSubmit);
+document.getElementById('lineage-clear-btn').addEventListener('click', lineageClearSearch);
+document.getElementById('lineage-month-filter-clear').addEventListener('click', clearLineageMonth);
+document.getElementById('lineage-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') lineageSearchSubmit();
+});
 
 checkHealth();
 activateModule('crm');

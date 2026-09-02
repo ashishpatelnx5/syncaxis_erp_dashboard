@@ -95,6 +95,51 @@ app.get('/api/crm/recent-invoices', (req, res) => {
 });
 app.get('/api/crm/pending-followups', (req, res) => runQuery(res, queries.crm.pendingFollowups));
 
+// ---------- Order Lineage (end-to-end genealogy for one sales order) ----------
+app.get('/api/lineage/orders', (req, res) => {
+  const search = (req.query.search || '').trim() || null;
+  const range = parseMonthRange(req.query.month);
+  runQuery(res, queries.lineage.orderList(!!search, !!range), {
+    ...(search && { search }),
+    ...(range && { start: range.start, end: range.end })
+  });
+});
+app.get('/api/lineage/monthly-breakdown', (req, res) => {
+  const fy = parseFYRange(req.query.fy);
+  runQuery(res, queries.lineage.monthlyBreakdown, { start: fy.start, end: fy.end });
+});
+app.get('/api/lineage/order/:id', async (req, res) => {
+  const orderId = Number(req.params.id);
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return res.status(400).json({ error: 'Invalid order id' });
+  }
+  try {
+    const pool = await getPool();
+    const run = (sqlText) => pool.request().input('orderId', orderId).query(sqlText);
+    const [header, shopJobOrders, production, storeIssues, despatchChallans, invoices, customerAR] = await Promise.all([
+      run(queries.lineage.header),
+      run(queries.lineage.shopJobOrders),
+      run(queries.lineage.production),
+      run(queries.lineage.storeIssues),
+      run(queries.lineage.despatchChallans),
+      run(queries.lineage.invoices),
+      run(queries.lineage.customerAR)
+    ]);
+    res.json({
+      header: header.recordset[0] || null,
+      shopJobOrders: shopJobOrders.recordset,
+      production: production.recordset,
+      storeIssues: storeIssues.recordset,
+      despatchChallans: despatchChallans.recordset,
+      invoices: invoices.recordset,
+      customerAR: customerAR.recordset[0] || null
+    });
+  } catch (err) {
+    console.error('Lineage query failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- Purchase ----------
 app.get('/api/purchase/summary', (req, res) => runQuery(res, queries.purchase.summary));
 app.get('/api/purchase/trend', (req, res) => runQuery(res, queries.purchase.trend));

@@ -434,6 +434,182 @@ const queries = {
     `
   },
 
+  // ---------------- ORDER LINEAGE (end-to-end genealogy) ----------------
+  // Full chain verified empirically against real data (not just column
+  // names) before building this — every hop below was cross-checked by
+  // matching items/quantities/dates across tables:
+  //   Enquiry (XINQDTL) <-[XQDINQID]- Quotation (XQTNDTL) <-[XOBQTNID]-
+  //   Sales Order (XORDDTL) <-[XOAFHORDID]- OAF (XOAFHDR) <-[XSHOAFID]-
+  //   Shop Job Order / manufacturing (XSJOHDR) <-[XWRHSJOID]- Production
+  //   Receipt (XWORCPHDR) -[XWRHWOREFID]-> Work Order (XWOHDR); Store issues
+  //   (XISSHDR) via XIHDOCID = SJO auto-no; Despatch via XDCDTL.XDCDOAFID
+  //   (a separate plain Delivery Challan, only used for ~17 orders) and/or
+  //   Invoice via XDCINVDTL.XDIDOAFID -> XDCINVHDR (dispatch-cum-invoice,
+  //   the common case). One order = exactly one OAF (confirmed 1:1 in this
+  //   data), but one OAF can spawn many Shop Job Orders (1 to 42 seen).
+  //
+  // Financial Settlement is NOT traced per-invoice: XOUTSTNDHDR has no
+  // reliable invoice-level link (XOH_VCH_REF_ID looked promising but
+  // amounts didn't match on verification — a false positive). Shown instead
+  // as the customer's overall outstanding balance via XOH_ACCCD.
+  lineage: {
+    orderList: (search, month) => {
+      const conditions = [];
+      if (search) {
+        conditions.push(`(c.MCMCUSTNM LIKE '%' + @search + '%'
+          OR o.XOBORDNO LIKE '%' + @search + '%'
+          OR CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) LIKE '%' + @search + '%')`);
+      }
+      if (month) conditions.push('o.XOBORDDT >= @start AND o.XOBORDDT < @end');
+      return `
+        SELECT ${search || month ? 'TOP 200' : 'TOP 50'}
+          o.XOBAUTOID AS orderId,
+          CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS syncaxisOrderNo,
+          o.XOBORDNO AS customerRefNo,
+          c.MCMCUSTNM AS customerName,
+          o.XOBORDDT AS orderDate,
+          o.XOBTOTDMCY AS orderValue,
+          o.XOBORDSTAT AS statusCode
+        FROM XORDDTL o
+        LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
+        ${conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''}
+        ORDER BY o.XOBORDDT DESC;
+      `;
+    },
+    // FY-bound monthly order count/value for this page's own breakdown —
+    // same 12-row-always shape as crm.monthlyBreakdown, but orders only.
+    monthlyBreakdown: `
+      WITH Months AS (
+        SELECT TOP 12 FORMAT(DATEADD(MONTH, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @start), 'yyyy-MM') AS period
+        FROM sys.all_objects
+      ),
+      Ord AS (
+        SELECT FORMAT(XOBORDDT, 'yyyy-MM') AS period, COUNT(*) AS orderCount, SUM(XOBTOTDMCY) AS orderValue
+        FROM XORDDTL WHERE XOBORDDT >= @start AND XOBORDDT < @end
+        GROUP BY FORMAT(XOBORDDT, 'yyyy-MM')
+      )
+      SELECT m.period, ISNULL(o.orderCount, 0) AS orderCount, ISNULL(o.orderValue, 0) AS orderValue
+      FROM Months m
+      LEFT JOIN Ord o ON m.period = o.period
+      ORDER BY m.period;
+    `,
+    header: `
+      SELECT
+        o.XOBAUTOID AS orderId,
+        CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS syncaxisOrderNo,
+        o.XOBORDNO AS customerRefNo,
+        o.XOBORDDT AS orderDate,
+        o.XOBTOTDMCY AS orderValue,
+        o.XOBORDSTAT AS statusCode,
+        CASE o.XOBORDSTAT
+          WHEN 'C' THEN 'Confirmed' WHEN 'A' THEN 'Amended' WHEN 'N' THEN 'New'
+          WHEN 'D' THEN 'Deleted' WHEN 'O' THEN 'On Hold' ELSE o.XOBORDSTAT
+        END AS statusLabel,
+        c.MCMCUSTNM AS customerName,
+        o.XOBCUSTCD AS customerCode,
+        e.MEMEMPNAME AS salesperson,
+        q.XQDAUTOID AS quotationId,
+        q.XQDQTNNO AS quotationNo,
+        q.XQDQTNDT AS quotationDate,
+        q.XQDTOTDMCY AS quotationValue,
+        i.XINAUTOID AS enquiryId,
+        i.XININQNO AS enquiryNo,
+        i.XININQDT AS enquiryDate,
+        oaf.XOAFHAUTOID AS oafId,
+        CONCAT(oaf.XOAFHYEAR, '/', oaf.XOAFHGRPCD, '/', oaf.XOAFHNO) AS oafNo,
+        oaf.XOAFHDATE AS oafDate
+      FROM XORDDTL o
+      LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
+      LEFT JOIN MEMPMST e ON o.XOBSPCODE = e.MEMEMPCODE
+      LEFT JOIN XQTNDTL q ON o.XOBQTNID = q.XQDAUTOID
+      LEFT JOIN XINQDTL i ON q.XQDINQID = i.XINAUTOID
+      LEFT JOIN XOAFHDR oaf ON oaf.XOAFHORDID = o.XOBAUTOID
+      WHERE o.XOBAUTOID = @orderId;
+    `,
+    shopJobOrders: `
+      SELECT
+        s.XSHSJAUTONO AS sjoId,
+        CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo,
+        s.XSHSITMCD AS itemCode,
+        s.XSHORDQTY AS orderedQty,
+        s.XSHCOMPQTY AS completedQty,
+        s.XSHSJOSTAT AS statusCode,
+        s.XSHSJODT AS sjoDate,
+        s.XSHCMPLTDT AS completedDate
+      FROM XOAFHDR oaf
+      JOIN XSJOHDR s ON s.XSHOAFID = oaf.XOAFHAUTOID
+      WHERE oaf.XOAFHORDID = @orderId
+      ORDER BY s.XSHSJODT;
+    `,
+    production: `
+      SELECT
+        wo.XWONO AS workOrderNo,
+        wo.XWOITMCD AS itemCode,
+        wo.XWOQTYORD AS orderedQty,
+        wo.XWOQTYRECV AS receivedQty,
+        wo.XWOSTATUS AS statusCode,
+        wo.XWODT AS workOrderDate,
+        wo.XWOCLOSDT AS closedDate,
+        wr.XWRHRCPQTY AS receiptQty,
+        wr.XWRHWODT AS receiptDate,
+        CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo
+      FROM XOAFHDR oaf
+      JOIN XSJOHDR s ON s.XSHOAFID = oaf.XOAFHAUTOID
+      JOIN XWORCPHDR wr ON wr.XWRHSJOID = s.XSHSJAUTONO
+      LEFT JOIN XWOHDR wo ON wo.XWOAUTOID = wr.XWRHWOREFID
+      WHERE oaf.XOAFHORDID = @orderId
+      ORDER BY wr.XWRHWODT;
+    `,
+    storeIssues: `
+      SELECT
+        i.XIHISSNO AS issueNo,
+        i.XIHISSDT AS issueDate,
+        i.XIHSTATUS AS statusCode,
+        CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo
+      FROM XOAFHDR oaf
+      JOIN XSJOHDR s ON s.XSHOAFID = oaf.XOAFHAUTOID
+      JOIN XISSHDR i ON i.XIHDOCID = s.XSHSJAUTONO AND i.XIHSJOWOTYP = 'S'
+      WHERE oaf.XOAFHORDID = @orderId
+      ORDER BY i.XIHISSDT;
+    `,
+    despatchChallans: `
+      -- Plain Delivery Challan — only populated for a minority of orders in
+      -- this data (17 headers total). When empty for an order, despatch
+      -- happened via the combined dispatch-cum-invoice document instead
+      -- (see the invoices query below).
+      SELECT DISTINCT
+        h.XDCHDCNO AS challanNo,
+        h.XDCHDATE AS challanDate,
+        h.XDCHSTAT AS statusCode
+      FROM XOAFHDR oaf
+      JOIN XDCDTL d ON d.XDCDOAFID = oaf.XOAFHAUTOID
+      JOIN XDCHDR h ON d.XDCDHID = h.XDCHAUTOID
+      WHERE oaf.XOAFHORDID = @orderId
+      ORDER BY h.XDCHDATE;
+    `,
+    invoices: `
+      SELECT DISTINCT
+        ih.XDIHAUTOID AS invoiceId,
+        ih.XDIHINVNO AS invoiceNo,
+        ih.XDIHINVDT AS invoiceDate,
+        ih.XDIHAMT AS invoiceValue,
+        ih.XDIHSTATUS AS statusCode
+      FROM XOAFHDR oaf
+      JOIN XDCINVDTL d ON d.XDIDOAFID = oaf.XOAFHAUTOID
+      JOIN XDCINVHDR ih ON d.XDIDREFID = ih.XDIHAUTOID
+      WHERE oaf.XOAFHORDID = @orderId
+      ORDER BY ih.XDIHINVDT;
+    `,
+    customerAR: `
+      -- Account-level, NOT specific to this order/invoice — see module note.
+      SELECT
+        ISNULL(SUM(CASE WHEN XOH_DR_CR = 'D' THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END), 0) AS receivable,
+        COUNT(*) AS outstandingEntries
+      FROM XOUTSTNDHDR
+      WHERE XOH_ACCCD = (SELECT XOBCUSTCD FROM XORDDTL WHERE XOBAUTOID = @orderId);
+    `
+  },
+
   // ---------------- PRODUCTION / WORK ORDERS ----------------
   production: {
     // XWOCLOSDT IS NULL is used as the "still open" signal, which is a safe

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SYNCAXIS — Management Dashboard</title>
+<link rel="icon" type="image/png" href="favicon.png">
 <link rel="stylesheet" href="style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
 </head>
@@ -13,11 +14,11 @@
 
   <nav class="sidebar">
     <div class="brand">
-      <span class="brand-mark">SX</span>
-      <span class="brand-name">SYNCAXIS</span>
+      <img class="brand-logo" src="syncaxis-logo.png" alt="SYNCAXIS">
     </div>
     <div class="nav-group">
       <button class="nav-item active" data-module="crm">CRM Pipeline</button>
+      <button class="nav-item" data-module="lineage">Order Lineage</button>
       <button class="nav-item" data-module="sales">Sales &amp; Revenue</button>
       <button class="nav-item" data-module="purchase">Purchase &amp; Vendors</button>
       <button class="nav-item" data-module="inventory">Inventory &amp; Stock</button>
@@ -131,6 +132,47 @@
             <thead><tr><th>Customer</th><th>Based on</th><th>Next follow-up</th><th>Salesperson</th><th>Remark</th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== ORDER LINEAGE ===================== -->
+    <section class="panel" id="panel-lineage">
+      <div class="crm-fy-bar">
+        <label for="lineage-fy-select">Financial year</label>
+        <select id="lineage-fy-select"></select>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="lineage-breakdown-title">Monthly breakdown <span class="muted">(click a month row to filter the order list below)</span></h3>
+          <table class="data-table" id="table-lineage-monthly-breakdown">
+            <thead><tr><th>Month</th><th>Sales Orders</th><th>Order Value</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="crm-filter-bar" id="lineage-month-filter-bar" hidden>
+        Showing: <strong id="lineage-month-filter-label"></strong>
+        <button id="lineage-month-filter-clear" class="btn-link">Clear month filter</button>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3>Find a sales order</h3>
+          <div class="lineage-search-bar">
+            <input type="text" id="lineage-search" placeholder="Search by customer, SO number, or PO number…">
+            <button id="lineage-search-btn" class="btn">Search</button>
+            <button id="lineage-clear-btn" class="btn-link">Show most recent instead</button>
+          </div>
+          <table class="data-table" id="table-lineage-orders">
+            <thead><tr><th>SO No.</th><th>Customer PO No.</th><th>Customer</th><th>Date</th><th>Value</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1" id="lineage-detail-wrap" hidden>
+        <div class="card">
+          <h3 id="lineage-detail-title">Order Lineage</h3>
+          <div id="lineage-timeline"></div>
         </div>
       </div>
     </section>
