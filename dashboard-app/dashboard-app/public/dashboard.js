@@ -451,7 +451,7 @@ async function lineageSearch() {
   const url = '/api/lineage/orders' + (params.length ? '?' + params.join('&') : '');
   const orders = await fetchJSON(url);
   fillTable('table-lineage-orders', orders,
-    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
+    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td><td>${r.itemNames || '—'}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}<td>${r.statusCode ?? ''}</td></tr>`, 7);
 }
 
 function lineageStage(title, count, dotClass, bodyHtml) {
@@ -500,7 +500,8 @@ function renderLineageTimeline(data) {
   html += lineageStage('Customer Order / Sales Order', null, 'done',
     `<div class="lineage-fact-row"><span class="muted">SO No.</span>${h.syncaxisOrderNo} <span class="muted">Customer PO No.</span>${h.customerRefNo || '—'}</div>
      <div class="lineage-fact-row"><span class="muted">Date</span>${fmtDate(h.orderDate)} <span class="muted">Value</span>${fmtMoney(h.orderValue)} <span class="muted">Status</span>${h.statusLabel}</div>
-     <div class="lineage-fact-row"><span class="muted">Customer</span>${h.customerName || ''} <span class="muted">Salesperson</span>${h.salesperson || '—'}</div>`);
+     <div class="lineage-fact-row"><span class="muted">Customer</span>${h.customerName || ''} <span class="muted">Salesperson</span>${h.salesperson || '—'}</div>
+     <div class="lineage-fact-row"><span class="muted">Item(s)</span>${h.itemNames || '—'}</div>`);
 
   html += lineageStage('Order Acceptance Form (OAF)', null, h.oafId ? 'done' : 'empty',
     h.oafId

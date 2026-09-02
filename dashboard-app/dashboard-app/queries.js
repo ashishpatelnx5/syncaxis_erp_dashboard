@@ -728,6 +728,12 @@ const queries = {
   // amounts didn't match on verification — a false positive). Shown instead
   // as the customer's overall outstanding balance via XOH_ACCCD.
   lineage: {
+    // Item names via XORDITMDLV (order line item) -> MITMMAST. XORDAUTOID
+    // matches XOBAUTOID (order header id) directly — verified an order with
+    // 3 line items (XOBAUTOID 10292) resolves all 3 correctly. Several
+    // distinct items per order are common, so aggregated with STRING_AGG,
+    // same pattern used for issue/despatch/invoice lines elsewhere in this
+    // file, rather than exploding into one row per item.
     orderList: (search, month) => {
       const conditions = [];
       if (search) {
@@ -744,9 +750,19 @@ const queries = {
           c.MCMCUSTNM AS customerName,
           o.XOBORDDT AS orderDate,
           o.XOBTOTDMCY AS orderValue,
-          o.XOBORDSTAT AS statusCode
+          o.XOBORDSTAT AS statusCode,
+          items.itemNames
         FROM XORDDTL o
         LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
+        OUTER APPLY (
+          SELECT STRING_AGG(itemName, ', ') AS itemNames
+          FROM (
+            SELECT DISTINCT LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName
+            FROM XORDITMDLV d
+            LEFT JOIN MITMMAST m ON d.XORDSITMCD = m.MIMITMICOD
+            WHERE d.XORDAUTOID = o.XOBAUTOID
+          ) x
+        ) items
         ${conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''}
         ORDER BY o.XOBORDDT DESC;
       `;
@@ -792,13 +808,23 @@ const queries = {
         i.XININQDT AS enquiryDate,
         oaf.XOAFHAUTOID AS oafId,
         CONCAT(oaf.XOAFHYEAR, '/', oaf.XOAFHGRPCD, '/', oaf.XOAFHNO) AS oafNo,
-        oaf.XOAFHDATE AS oafDate
+        oaf.XOAFHDATE AS oafDate,
+        items.itemNames
       FROM XORDDTL o
       LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
       LEFT JOIN MEMPMST e ON o.XOBSPCODE = e.MEMEMPCODE
       LEFT JOIN XQTNDTL q ON o.XOBQTNID = q.XQDAUTOID
       LEFT JOIN XINQDTL i ON q.XQDINQID = i.XINAUTOID
       LEFT JOIN XOAFHDR oaf ON oaf.XOAFHORDID = o.XOBAUTOID
+      OUTER APPLY (
+        SELECT STRING_AGG(itemName, ', ') AS itemNames
+        FROM (
+          SELECT DISTINCT LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName
+          FROM XORDITMDLV d
+          LEFT JOIN MITMMAST m ON d.XORDSITMCD = m.MIMITMICOD
+          WHERE d.XORDAUTOID = o.XOBAUTOID
+        ) x
+      ) items
       WHERE o.XOBAUTOID = @orderId;
     `,
     // XSHSITMCD/XWOITMCD join straight to MITMMAST.MIMITMICOD (verified) —
