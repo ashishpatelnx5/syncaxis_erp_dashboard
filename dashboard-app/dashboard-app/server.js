@@ -1,11 +1,69 @@
 require('dotenv').config();
 const express = require('express');
+const session = require('express-session');
 const path = require('path');
 const { getPool } = require('./db');
 const queries = require('./queries');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+app.use(express.json());
+
+// Every response is behind a login, so none of it should ever be cached or
+// restored from the browser's back-forward cache — otherwise pressing Back
+// after signing out can show a stale copy of the dashboard without the
+// browser re-checking the server (looks like "sign out didn't work").
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  next();
+});
+
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: false, // internal LAN over plain HTTP, not HTTPS — see DEPLOYMENT.md
+    maxAge: 8 * 60 * 60 * 1000 // 8 hours
+  }
+}));
+
+// Single shared login (AUTH_USERNAME/AUTH_PASSWORD in .env) — no per-user
+// accounts. Everything except the login page itself and the assets it needs
+// requires an authenticated session; API requests get a 401 instead of a
+// redirect so the frontend can react without a full page reload.
+const PUBLIC_PATHS = new Set(['/login.html', '/api/login', '/syncaxis-logo.png', '/favicon.png', '/style.css']);
+
+app.use((req, res, next) => {
+  if (PUBLIC_PATHS.has(req.path) || (req.session && req.session.authenticated)) {
+    return next();
+  }
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  res.redirect('/login.html?next=' + encodeURIComponent(req.originalUrl));
+});
+
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (username === process.env.AUTH_USERNAME && password === process.env.AUTH_PASSWORD) {
+    req.session.authenticated = true;
+    req.session.username = username;
+    return res.json({ ok: true });
+  }
+  res.status(401).json({ error: 'Invalid username or password' });
+});
+
+// Who's logged in — covered by the auth gate above like any other /api/
+// route, so this only ever responds once a session already exists.
+app.get('/api/session', (req, res) => {
+  res.json({ username: req.session.username });
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 

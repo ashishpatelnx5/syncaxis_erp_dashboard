@@ -16,6 +16,15 @@
     <div class="brand">
       <img class="brand-logo" src="syncaxis-logo.png" alt="SYNCAXIS">
     </div>
+    <div class="sidebar-user">
+      <div class="user-avatar" id="userAvatar">?</div>
+      <span id="userName" class="user-name">—</span>
+      <button id="logoutBtn" class="sidebar-logout" title="Sign out">Sign out</button>
+    </div>
+    <div class="sidebar-footer">
+      <span id="dbStatusDot" class="status-dot"></span>
+      <span id="dbStatusText"></span>
+    </div>
     <div class="nav-group">
       <button class="nav-item active" data-module="crm">CRM Pipeline</button>
       <button class="nav-item" data-module="lineage">Order Lineage</button>
@@ -24,10 +33,6 @@
       <button class="nav-item" data-module="inventory">Inventory &amp; Stock</button>
       <button class="nav-item" data-module="finance">Finance (AR / AP)</button>
       <button class="nav-item" data-module="production">Production &amp; WOs</button>
-    </div>
-    <div class="sidebar-footer">
-      <span id="dbStatusDot" class="status-dot"></span>
-      <span id="dbStatusText">Checking connection…</span>
     </div>
   </nav>
 

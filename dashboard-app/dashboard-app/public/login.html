@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in — SYNCAXIS</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="stylesheet" href="style.css">
+<style>
+  html, body { overflow: auto; }
+  body {
+    background: var(--navy-dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .login-card {
+    background: var(--surface);
+    border-radius: 10px;
+    padding: 36px 32px;
+    width: 100%;
+    max-width: 340px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+  }
+  .login-logo {
+    display: block;
+    max-width: 100%;
+    margin: 0 auto 24px;
+    background: #fff;
+    border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .login-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--navy);
+    margin: 0 0 20px;
+    text-align: center;
+  }
+  .login-field {
+    margin-bottom: 14px;
+  }
+  .login-field label {
+    display: block;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+  }
+  .login-field input {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: var(--font);
+    color: var(--text);
+  }
+  .login-field input:focus {
+    outline: none;
+    border-color: var(--steel);
+  }
+  .login-password-wrap {
+    position: relative;
+  }
+  .login-password-wrap input {
+    padding-right: 38px;
+  }
+  .login-password-toggle {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 36px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    padding: 0;
+  }
+  .login-password-toggle:hover {
+    color: var(--steel);
+  }
+  .login-password-toggle svg {
+    width: 18px;
+    height: 18px;
+  }
+  .login-submit {
+    width: 100%;
+    margin-top: 6px;
+  }
+  .login-error {
+    background: #FBEAEA;
+    color: var(--red);
+    border: 1px solid var(--red);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12.5px;
+    margin-bottom: 14px;
+  }
+  .login-error[hidden] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="login-card">
+  <img class="login-logo" src="syncaxis-logo.png" alt="SYNCAXIS">
+  <h1 class="login-title">Management Dashboard</h1>
+  <div class="login-error" id="loginError" hidden></div>
+  <form id="loginForm">
+    <div class="login-field">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autofocus required>
+    </div>
+    <div class="login-field">
+      <label for="password">Password</label>
+      <div class="login-password-wrap">
+        <input type="password" id="password" name="password" autocomplete="current-password" required>
+        <button type="button" class="login-password-toggle" id="togglePassword" aria-label="Show password" title="Show password">
+          <svg id="eyeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <button type="submit" class="btn login-submit" id="loginSubmit">Sign in</button>
+  </form>
+</div>
+
+<script>
+const form = document.getElementById('loginForm');
+const errorBox = document.getElementById('loginError');
+const submitBtn = document.getElementById('loginSubmit');
+
+const EYE_OPEN = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"></path><circle cx="12" cy="12" r="3"></circle>';
+const EYE_CLOSED = '<path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a20.6 20.6 0 0 1 5.06-6.06M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a20.6 20.6 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>';
+
+const passwordInput = document.getElementById('password');
+const toggleBtn = document.getElementById('togglePassword');
+const eyeIcon = document.getElementById('eyeIcon');
+toggleBtn.addEventListener('click', () => {
+  const showing = passwordInput.type === 'text';
+  passwordInput.type = showing ? 'password' : 'text';
+  eyeIcon.innerHTML = showing ? EYE_OPEN : EYE_CLOSED;
+  toggleBtn.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+  toggleBtn.title = showing ? 'Show password' : 'Hide password';
+});
+
+// If a login redirected us here with ?next=/some/path, return there after success.
+const nextPath = new URLSearchParams(location.search).get('next') || '/';
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errorBox.hidden = true;
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Signing in…';
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value
+      })
+    });
+    if (res.ok) {
+      location.href = nextPath;
+      return;
+    }
+    const body = await res.json().catch(() => ({}));
+    errorBox.textContent = body.error || 'Sign in failed.';
+    errorBox.hidden = false;
+  } catch (err) {
+    errorBox.textContent = 'Could not reach the server — check your connection.';
+    errorBox.hidden = false;
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Sign in';
+  }
+});
+</script>
+
+</body>
+</html>

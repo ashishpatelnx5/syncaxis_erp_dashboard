@@ -9,3 +9,8 @@ DB_PASSWORD=CHANGE_ME
 
 # Port the dashboard web app itself runs on (open http://localhost:PORT)
 PORT=3000
+
+# Single shared login for the dashboard (no per-user accounts).
+AUTH_USERNAME=CHANGE_ME
+AUTH_PASSWORD=CHANGE_ME
+SESSION_SECRET=CHANGE_ME_TO_A_LONG_RANDOM_STRING

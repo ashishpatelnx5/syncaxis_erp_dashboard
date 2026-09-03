@@ -20,6 +20,12 @@ function dateTd(v) { return td(v ? new Date(v).toLocaleDateString() : '', v ? ne
 
 async function fetchJSON(url) {
   const res = await fetch(url);
+  if (res.status === 401) {
+    // Session expired (or never existed) mid-use — bounce to login instead
+    // of leaving every table stuck showing a failed-to-load state.
+    location.href = '/login.html?next=' + encodeURIComponent(location.pathname + location.search);
+    throw new Error('Not authenticated');
+  }
   if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
   return res.json();
 }
@@ -1052,6 +1058,18 @@ async function refreshCurrent() {
   }
 }
 
+async function loadSessionInfo() {
+  try {
+    const session = await fetchJSON('/api/session');
+    const name = session.username || '';
+    document.getElementById('userAvatar').textContent = name ? name.charAt(0) : '?';
+    document.getElementById('userName').textContent = name || 'Signed in';
+    document.getElementById('userName').title = name;
+  } catch (err) {
+    // fetchJSON already redirects to login on a 401; nothing else to do here
+  }
+}
+
 async function checkHealth() {
   const dot = document.getElementById('dbStatusDot');
   const text = document.getElementById('dbStatusText');
@@ -1069,6 +1087,27 @@ document.querySelectorAll('.nav-item').forEach(btn => {
   btn.addEventListener('click', () => activateModule(btn.dataset.module));
 });
 document.getElementById('refreshBtn').addEventListener('click', refreshCurrent);
+document.getElementById('logoutBtn').addEventListener('click', (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Signing out…';
+  // Always land on the login page, even if /api/logout is slow or fails —
+  // a destroyed-or-not session either way means the next page load bounces
+  // through the auth gate correctly.
+  const goToLogin = () => { location.href = '/login.html'; };
+  const fallback = setTimeout(goToLogin, 1500);
+  fetch('/api/logout', { method: 'POST' }).finally(() => {
+    clearTimeout(fallback);
+    goToLogin();
+  });
+});
+
+// If this page is ever restored from the browser's back-forward cache
+// (e.g. pressing Back right after signing out), force a real reload so the
+// server's auth check runs again instead of showing the stale cached DOM.
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) location.reload();
+});
 document.getElementById('crm-filter-clear').addEventListener('click', clearCrmMonth);
 document.getElementById('lineage-search-btn').addEventListener('click', lineageSearchSubmit);
 document.getElementById('lineage-clear-btn').addEventListener('click', lineageClearSearch);
@@ -1084,4 +1123,5 @@ document.getElementById('lineage-search').addEventListener('keydown', (e) => {
 document.querySelectorAll('.data-table').forEach(t => { initSortableTable(t); initTablePagination(t); });
 
 checkHealth();
+loadSessionInfo();
 activateModule('crm');
