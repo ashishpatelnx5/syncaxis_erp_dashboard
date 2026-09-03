@@ -41,9 +41,9 @@ npm ci
 
 ## 3. Create `.env`
 
-This file is intentionally excluded from git (it holds real DB credentials),
-so it won't come with the clone — create it fresh. Copy
-`.env - Copy.example` to `.env`, then edit `.env` in Notepad so it reads:
+This file is intentionally excluded from git (it holds real credentials), so
+it won't come with the clone — create it fresh. Copy `.env - Copy.example`
+to `.env`, then edit `.env` in Notepad so it reads:
 
 ```
 DB_SERVER=192.168.3.9
@@ -52,17 +52,33 @@ DB_DATABASE=SYNCAXIS
 DB_USER=syncaxis_dashboard_ro
 DB_PASSWORD=<the read-only password — ask Ashish if you don't have it>
 PORT=3000
+
+AUTH_USERNAME=syncaxis
+AUTH_PASSWORD=<the shared dashboard login password — ask Ashish>
+SESSION_SECRET=<a long random string — see below>
 ```
+
+`AUTH_USERNAME`/`AUTH_PASSWORD` are the one shared login everyone uses to
+open the dashboard (there are no individual accounts). `SESSION_SECRET`
+signs the login cookie; generate a fresh one per deployment rather than
+reusing the value from another `.env` — in PowerShell:
+```
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+Paste the output as `SESSION_SECRET`. To force everyone to sign in again
+later (e.g. right after changing `AUTH_PASSWORD`), regenerate this value and
+restart the service — every existing browser session is invalidated at once.
 
 ## 4. Test it manually first
 
 ```
 npm start
 ```
-Open a browser **on the server itself** to http://localhost:3000 and confirm
-the green "Connected" dot in the sidebar. This is where you'll find out
-immediately if the network path to the DB works from this machine. Press
-Ctrl+C in the terminal to stop it once confirmed.
+Open a browser **on the server itself** to http://localhost:3000 — it should
+redirect to a login page. Sign in with the `AUTH_USERNAME`/`AUTH_PASSWORD`
+from `.env`, then confirm the green "Connected" dot in the sidebar. This is
+where you'll find out immediately if the network path to the DB works from
+this machine. Press Ctrl+C in the terminal to stop it once confirmed.
 
 ## 5. Install it as a permanent Windows Service (NSSM)
 
@@ -123,3 +139,16 @@ nssm restart SyncaxisDashboard
   just restart after editing `.env` (the app reads it fresh on every start).
 - **`npm ci` fails**: make sure `package-lock.json` came across with the
   clone/copy — it must be present alongside `package.json`.
+- **Login page rejects the correct username/password**: `AUTH_USERNAME`/
+  `AUTH_PASSWORD` in `.env` don't match what's being typed — check for stray
+  whitespace or quotes if you pasted them. The app reads `.env` fresh on
+  every start, so a fix just needs a restart, not a rebuild.
+- **`express-session deprecated req.secret` warning in the log**:
+  `SESSION_SECRET` is missing or empty in `.env`. The app still runs, but
+  sessions are signed insecurely — set a real value (see step 3) and
+  restart.
+- **Everyone gets signed out at once, unprompted**: expected after a service
+  restart (e.g. `nssm restart`, a reboot, or a redeploy) — sessions live in
+  the server's memory, not a database, so restarting the process always
+  clears them. This is also what happens deliberately if you rotate
+  `SESSION_SECRET`.
