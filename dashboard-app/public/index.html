@@ -91,9 +91,10 @@
           </table>
         </div>
       </div>
-      <div class="crm-filter-bar" id="crm-filter-bar" hidden>
+      <div class="crm-filter-bar" id="crm-filter-bar">
         Showing: <strong id="crm-filter-label"></strong>
-        <button id="crm-filter-clear" class="btn-link">Show most recent instead</button>
+        <button id="crm-filter-all" class="btn-link">Show all</button>
+        <button id="crm-filter-recent" class="btn-link">Show most recent</button>
       </div>
       <div class="grid-1">
         <div class="card">
@@ -172,8 +173,10 @@
           <div class="lineage-search-bar">
             <input type="text" id="lineage-search" placeholder="Search by customer, SO number, or PO number…">
             <button id="lineage-search-btn" class="btn">Search</button>
-            <button id="lineage-clear-btn" class="btn-link">Show most recent instead</button>
+            <button id="lineage-filter-all" class="btn-link">Show all</button>
+            <button id="lineage-clear-btn" class="btn-link">Show most recent</button>
           </div>
+          <div class="table-summary" id="lineage-orders-summary"></div>
           <table class="data-table" id="table-lineage-orders">
             <thead><tr><th>SO No.</th><th>Customer PO No.</th><th>Customer</th><th>Date</th><th>Value</th><th>Status</th><th>Item(s)</th></tr></thead>
             <tbody></tbody>
@@ -231,9 +234,10 @@
           </table>
         </div>
       </div>
-      <div class="crm-filter-bar" id="sales-month-filter-bar" hidden>
+      <div class="crm-filter-bar" id="sales-month-filter-bar">
         Showing: <strong id="sales-month-filter-label"></strong>
-        <button id="sales-month-filter-clear" class="btn-link">Show most recent instead</button>
+        <button id="sales-filter-all" class="btn-link">Show all</button>
+        <button id="sales-filter-recent" class="btn-link">Show most recent</button>
       </div>
       <div class="grid-1">
         <div class="card">
@@ -290,9 +294,10 @@
           </table>
         </div>
       </div>
-      <div class="crm-filter-bar" id="purchase-month-filter-bar" hidden>
+      <div class="crm-filter-bar" id="purchase-month-filter-bar">
         Showing: <strong id="purchase-month-filter-label"></strong>
-        <button id="purchase-month-filter-clear" class="btn-link">Show most recent instead</button>
+        <button id="purchase-filter-all" class="btn-link">Show all</button>
+        <button id="purchase-filter-recent" class="btn-link">Show most recent</button>
       </div>
       <div class="grid-1">
         <div class="card">
@@ -306,7 +311,7 @@
       </div>
       <div class="grid-1">
         <div class="card">
-          <h3>Recent purchase orders</h3>
+          <h3 id="purchase-orders-title">Recent purchase orders</h3>
           <div class="table-summary" id="purchase-orders-summary"></div>
           <table class="data-table" id="table-purchase-orders">
             <thead><tr><th>PO No.</th><th>Vendor</th><th>Order Date</th><th>Order Value</th><th>Received Value</th><th>Status</th></tr></thead>
@@ -316,7 +321,7 @@
       </div>
       <div class="grid-1">
         <div class="card">
-          <h3>Material received (GRN)</h3>
+          <h3 id="purchase-grn-title">Material received (GRN)</h3>
           <div class="table-summary" id="purchase-grn-summary"></div>
           <table class="data-table" id="table-purchase-grn">
             <thead><tr><th>GRN No.</th><th>PO No.</th><th>Vendor</th><th>Receipt Date</th><th>Vendor Challan No.</th><th>Challan Date</th><th>Status</th></tr></thead>
@@ -373,9 +378,14 @@
           </table>
         </div>
       </div>
+      <div class="crm-filter-bar" id="inv-receipts-filter-bar">
+        Showing: <strong id="inv-receipts-filter-label"></strong>
+        <button id="inv-receipts-filter-all" class="btn-link">Show all</button>
+        <button id="inv-receipts-filter-recent" class="btn-link">Show most recent</button>
+      </div>
       <div class="grid-1">
         <div class="card">
-          <h3>Recent production receipts</h3>
+          <h3 id="inv-production-receipts-title">Recent production receipts</h3>
           <div class="table-summary" id="inv-production-receipts-summary"></div>
           <table class="data-table" id="table-inv-production-receipts">
             <thead><tr><th>Work Order No.</th><th>Item</th><th>Receipt Date</th><th>Receipt Qty</th><th>Status</th></tr></thead>
@@ -445,6 +455,11 @@
           </table>
         </div>
       </div>
+      <div class="crm-filter-bar" id="finance-bills-filter-bar">
+        Showing: <strong id="finance-bills-filter-label"></strong>
+        <button id="finance-bills-filter-all" class="btn-link">Show all</button>
+        <button id="finance-bills-filter-recent" class="btn-link">Show most recent</button>
+      </div>
       <div class="grid-1">
         <div class="card">
           <h3 id="finance-purchase-bills-title">Recent purchase bills (expenses)</h3>
@@ -497,9 +512,10 @@
           </table>
         </div>
       </div>
-      <div class="crm-filter-bar" id="prod-month-filter-bar" hidden>
+      <div class="crm-filter-bar" id="prod-month-filter-bar">
         Showing: <strong id="prod-month-filter-label"></strong>
-        <button id="prod-month-filter-clear" class="btn-link">Show most recent instead</button>
+        <button id="prod-filter-all" class="btn-link">Show all</button>
+        <button id="prod-filter-recent" class="btn-link">Show most recent</button>
       </div>
       <div class="grid-1">
         <div class="card">

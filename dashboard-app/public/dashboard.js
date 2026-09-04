@@ -249,7 +249,8 @@ function barChart(canvasId, labels, data, label, color) {
 
 // ---------------- Module loaders ----------------
 
-let crmSelectedMonth = null; // 'YYYY-MM', or null = show most-recent-15 (default)
+let crmSelectedMonth = null; // 'YYYY-MM', or null = not filtered to a specific month
+let crmViewMode = 'recent'; // 'recent' (most recent 15, default) or 'all' (every record in the selected FY) — overridden by crmSelectedMonth when set
 
 function crmMonthLabel(period) {
   const [y, m] = period.split('-').map(Number);
@@ -261,7 +262,8 @@ function selectCrmMonth(period) {
   refreshCurrent();
 }
 
-function clearCrmMonth() {
+function setCrmViewMode(mode) {
+  crmViewMode = mode;
   crmSelectedMonth = null;
   refreshCurrent();
 }
@@ -299,16 +301,21 @@ function initCrmFYSelect() {
 
 async function loadCRM() {
   initCrmFYSelect();
-  const monthQuery = crmSelectedMonth ? `?month=${encodeURIComponent(crmSelectedMonth)}` : '';
+  // A specific month (clicking a monthly-breakdown row) always wins; otherwise
+  // 'all' scopes the 4 recent-* lists to the whole selected FY (default), or
+  // 'recent' asks for the unfiltered "most recent 15" instead.
+  const listQuery = crmSelectedMonth
+    ? `?month=${encodeURIComponent(crmSelectedMonth)}`
+    : (crmViewMode === 'all' ? `?view=all&fy=${crmSelectedFY}` : '');
   const fyQuery = `?fy=${crmSelectedFY}`;
   const [summary, funnel, monthly, enquiries, quotations, orders, invoices, followups] = await Promise.all([
     fetchJSON('/api/crm/summary' + fyQuery),
     fetchJSON('/api/crm/pipeline-funnel' + fyQuery),
     fetchJSON('/api/crm/monthly-breakdown' + fyQuery),
-    fetchJSON('/api/crm/recent-enquiries' + monthQuery),
-    fetchJSON('/api/crm/recent-quotations' + monthQuery),
-    fetchJSON('/api/crm/recent-orders' + monthQuery),
-    fetchJSON('/api/crm/recent-invoices' + monthQuery),
+    fetchJSON('/api/crm/recent-enquiries' + listQuery),
+    fetchJSON('/api/crm/recent-quotations' + listQuery),
+    fetchJSON('/api/crm/recent-orders' + listQuery),
+    fetchJSON('/api/crm/recent-invoices' + listQuery),
     fetchJSON('/api/crm/pending-followups')
   ]);
 
@@ -344,14 +351,22 @@ async function loadCRM() {
     ` &middot; Invoices: <strong>${fmtNum(fySum('invoiceCount'))}</strong> (<strong>${fmtMoney(fySum('invoiceValue'))}</strong>)` +
     ` &middot; Follow-ups: <strong>${fmtNum(fySum('followUpCount'))}</strong>`;
 
-  const filterBar = document.getElementById('crm-filter-bar');
-  filterBar.hidden = !crmSelectedMonth;
-  const label = crmSelectedMonth ? crmMonthLabel(crmSelectedMonth) : '';
+  // A complete data set (no arbitrary row cap) when a month is selected or
+  // when in "all" mode — only "recent" mode is genuinely a capped subset.
+  const isCompleteSet = !!crmSelectedMonth || crmViewMode === 'all';
+  const label = crmSelectedMonth ? crmMonthLabel(crmSelectedMonth) : (crmViewMode === 'all' ? `All — ${fyText}` : 'Most recent 15');
   document.getElementById('crm-filter-label').textContent = label;
-  document.getElementById('crm-enquiries-title').textContent = crmSelectedMonth ? `Enquiries — ${label}` : 'Recent enquiries';
-  document.getElementById('crm-quotations-title').textContent = crmSelectedMonth ? `Quotations — ${label}` : 'Recent quotations';
-  document.getElementById('crm-orders-title').textContent = crmSelectedMonth ? `Sales orders — ${label}` : 'Recent sales orders';
-  document.getElementById('crm-invoices-title').textContent = crmSelectedMonth ? `Invoices — ${label}` : 'Recent invoices';
+  document.getElementById('crm-filter-all').hidden = !crmSelectedMonth && crmViewMode === 'all';
+  document.getElementById('crm-filter-recent').hidden = !crmSelectedMonth && crmViewMode === 'recent';
+
+  document.getElementById('crm-enquiries-title').textContent = crmSelectedMonth
+    ? `Enquiries — ${label}` : (crmViewMode === 'all' ? `All enquiries — ${fyText}` : 'Recent enquiries');
+  document.getElementById('crm-quotations-title').textContent = crmSelectedMonth
+    ? `Quotations — ${label}` : (crmViewMode === 'all' ? `All quotations — ${fyText}` : 'Recent quotations');
+  document.getElementById('crm-orders-title').textContent = crmSelectedMonth
+    ? `Sales orders — ${label}` : (crmViewMode === 'all' ? `All sales orders — ${fyText}` : 'Recent sales orders');
+  document.getElementById('crm-invoices-title').textContent = crmSelectedMonth
+    ? `Invoices — ${label}` : (crmViewMode === 'all' ? `All invoices — ${fyText}` : 'Recent invoices');
 
   fillTable('table-crm-enquiries', enquiries,
     r => `<tr><td>${r.enquiryNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.enquiryDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.quotationNo ?? '—'}</td>${dateTd(r.nextFollowUp)}</tr>`, 6);
@@ -359,15 +374,15 @@ async function loadCRM() {
 
   fillTable('table-crm-quotations', quotations,
     r => `<tr><td>${r.quotationNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.quotationValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 5);
-  tableSummary('crm-quotations-summary', quotations, 'quotationValue', 'quotation', crmSelectedMonth ? 'Total' : 'Total (of rows shown)');
+  tableSummary('crm-quotations-summary', quotations, 'quotationValue', 'quotation', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-orders', orders,
     r => `<tr><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.orderValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td>${td(r.invoiceCount ? fmtNum(r.invoiceCount) : 'No', Number(r.invoiceCount) || 0, 'num')}<td>${r.lastInvoiceNo ?? '—'}</td>${td(r.invoicedAmount ? fmtMoney(r.invoicedAmount) : '—', Number(r.invoicedAmount) || 0, 'num')}</tr>`, 8);
-  tableSummary('crm-orders-summary', orders, 'orderValue', 'order', crmSelectedMonth ? 'Total' : 'Total (of rows shown)');
+  tableSummary('crm-orders-summary', orders, 'orderValue', 'order', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-invoices', invoices,
     r => `<tr><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
-  tableSummary('crm-invoices-summary', invoices, 'invoiceValue', 'invoice', crmSelectedMonth ? 'Total' : 'Total (of rows shown)');
+  tableSummary('crm-invoices-summary', invoices, 'invoiceValue', 'invoice', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-followups', followups,
     r => `<tr><td>${r.customerName ?? ''}</td><td>${r.basedOnLabel ?? r.basedOn ?? ''}</td>${dateTd(r.nextFollowUpDate)}<td>${r.salesperson ?? ''}</td><td>${r.remark ?? r.nextAgenda ?? ''}</td></tr>`, 5);
@@ -381,6 +396,7 @@ function fmtDate(d) { return d ? new Date(d).toLocaleDateString() : ''; }
 let lineageSelectedFY = currentFYStartYear();
 let lineageFYInitialized = false;
 let lineageSelectedMonth = null; // 'YYYY-MM', or null = no month filter
+let lineageViewMode = 'recent'; // 'recent' (most recent 10, default) or 'all' (every order in the selected FY) — overridden by a search term or lineageSelectedMonth when set
 
 function initLineageFYSelect() {
   if (lineageFYInitialized) return;
@@ -419,6 +435,14 @@ function lineageSearchSubmit() {
 function lineageClearSearch() {
   document.getElementById('lineage-search').value = '';
   lineageSelectedMonth = null;
+  lineageViewMode = 'recent';
+  refreshCurrent();
+}
+
+function setLineageViewMode(mode) {
+  document.getElementById('lineage-search').value = '';
+  lineageSelectedMonth = null;
+  lineageViewMode = mode;
   refreshCurrent();
 }
 
@@ -454,10 +478,18 @@ async function lineageSearch() {
   const params = [];
   if (term) params.push('search=' + encodeURIComponent(term));
   if (lineageSelectedMonth) params.push('month=' + encodeURIComponent(lineageSelectedMonth));
+  if (!term && !lineageSelectedMonth && lineageViewMode === 'all') {
+    params.push('view=all', 'fy=' + lineageSelectedFY);
+  }
   const url = '/api/lineage/orders' + (params.length ? '?' + params.join('&') : '');
   const orders = await fetchJSON(url);
   fillTable('table-lineage-orders', orders,
     r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}<td>${r.statusCode ?? ''}</td><td>${r.itemNames || '—'}</td></tr>`, 7);
+  tableSummary('lineage-orders-summary', orders, 'orderValue', 'order', (lineageSelectedMonth || (!term && lineageViewMode === 'all')) ? 'Total' : 'Total (of rows shown)');
+
+  const isSearching = !!term;
+  document.getElementById('lineage-filter-all').hidden = !isSearching && !lineageSelectedMonth && lineageViewMode === 'all';
+  document.getElementById('lineage-clear-btn').hidden = !isSearching && !lineageSelectedMonth && lineageViewMode === 'recent';
 }
 
 function lineageStage(title, count, dotClass, bodyHtml) {
@@ -591,7 +623,8 @@ async function viewLineage(orderId) {
 
 let salesSelectedFY = currentFYStartYear();
 let salesFYInitialized = false;
-let salesSelectedMonth = null; // 'YYYY-MM', or null = show most-recent-15 (default)
+let salesSelectedMonth = null; // 'YYYY-MM', or null = not filtered to a specific month
+let salesViewMode = 'recent'; // 'recent' (most recent 10, default) or 'all' (every invoice in the selected FY) — overridden by salesSelectedMonth when set
 
 function initSalesFYSelect() {
   if (salesFYInitialized) return;
@@ -616,21 +649,23 @@ function selectSalesMonth(period) {
   refreshCurrent();
 }
 
-function clearSalesMonth() {
+function setSalesViewMode(mode) {
+  salesViewMode = mode;
   salesSelectedMonth = null;
   refreshCurrent();
 }
 
 async function loadSales() {
   initSalesFYSelect();
-  const fyQuery = `?fy=${salesSelectedFY}`;
-  const monthQuery = salesSelectedMonth ? `?month=${encodeURIComponent(salesSelectedMonth)}` : '';
+  const listQuery = salesSelectedMonth
+    ? `?month=${encodeURIComponent(salesSelectedMonth)}`
+    : (salesViewMode === 'all' ? `?view=all&fy=${salesSelectedFY}` : '');
   const [summary, trend, topCustomers, monthly, invoices] = await Promise.all([
     fetchJSON('/api/sales/summary'),
     fetchJSON('/api/sales/trend'),
     fetchJSON('/api/sales/top-customers'),
-    fetchJSON('/api/sales/monthly-breakdown' + fyQuery),
-    fetchJSON('/api/sales/invoices' + monthQuery)
+    fetchJSON('/api/sales/monthly-breakdown?fy=' + salesSelectedFY),
+    fetchJSON('/api/sales/invoices' + listQuery)
   ]);
   const s = summary[0] || {};
   document.getElementById('sales-revenue').textContent = fmtMoney(s.totalRevenue);
@@ -652,21 +687,23 @@ async function loadSales() {
   document.getElementById('sales-breakdown-summary').innerHTML =
     `FY total &middot; Invoices: <strong>${fmtNum(fyInvoiceTotal)}</strong> &middot; Revenue: <strong>${fmtMoney(fyRevenueTotal)}</strong>`;
 
-  const filterBar = document.getElementById('sales-month-filter-bar');
-  filterBar.hidden = !salesSelectedMonth;
-  const monthLabel = salesSelectedMonth ? crmMonthLabel(salesSelectedMonth) : '';
-  document.getElementById('sales-month-filter-label').textContent = monthLabel;
+  const isCompleteSet = !!salesSelectedMonth || salesViewMode === 'all';
+  const label = salesSelectedMonth ? crmMonthLabel(salesSelectedMonth) : (salesViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10');
+  document.getElementById('sales-month-filter-label').textContent = label;
+  document.getElementById('sales-filter-all').hidden = !salesSelectedMonth && salesViewMode === 'all';
+  document.getElementById('sales-filter-recent').hidden = !salesSelectedMonth && salesViewMode === 'recent';
   document.getElementById('sales-invoices-title').textContent = salesSelectedMonth
-    ? `Invoices — ${monthLabel}` : 'Recent invoices';
+    ? `Invoices — ${label}` : (salesViewMode === 'all' ? `All invoices — ${fyText}` : 'Recent invoices');
 
   fillTable('table-sales-invoices', invoices,
     r => `<tr><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
-  tableSummary('sales-invoices-summary', invoices, 'invoiceValue', 'invoice', salesSelectedMonth ? 'Total' : 'Total (of rows shown)');
+  tableSummary('sales-invoices-summary', invoices, 'invoiceValue', 'invoice', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 }
 
 let purchaseSelectedFY = currentFYStartYear();
 let purchaseFYInitialized = false;
-let purchaseSelectedMonth = null; // 'YYYY-MM', or null = show most-recent-50 (default)
+let purchaseSelectedMonth = null; // 'YYYY-MM', or null = not filtered to a specific month
+let purchaseViewMode = 'recent'; // 'recent' (most recent 10, default) or 'all' (every record in the selected FY) — governs bills/orders/GRN together, overridden by purchaseSelectedMonth when set
 
 function initPurchaseFYSelect() {
   if (purchaseFYInitialized) return;
@@ -691,23 +728,25 @@ function selectPurchaseMonth(period) {
   refreshCurrent();
 }
 
-function clearPurchaseMonth() {
+function setPurchaseViewMode(mode) {
+  purchaseViewMode = mode;
   purchaseSelectedMonth = null;
   refreshCurrent();
 }
 
 async function loadPurchase() {
   initPurchaseFYSelect();
-  const fyQuery = `?fy=${purchaseSelectedFY}`;
-  const monthQuery = purchaseSelectedMonth ? `?month=${encodeURIComponent(purchaseSelectedMonth)}` : '';
+  const listQuery = purchaseSelectedMonth
+    ? `?month=${encodeURIComponent(purchaseSelectedMonth)}`
+    : (purchaseViewMode === 'all' ? `?view=all&fy=${purchaseSelectedFY}` : '');
   const [summary, trend, topVendors, monthly, bills, orders, materialReceived] = await Promise.all([
     fetchJSON('/api/purchase/summary'),
     fetchJSON('/api/purchase/trend'),
     fetchJSON('/api/purchase/top-vendors'),
-    fetchJSON('/api/purchase/monthly-breakdown' + fyQuery),
-    fetchJSON('/api/purchase/bills' + monthQuery),
-    fetchJSON('/api/purchase/orders'),
-    fetchJSON('/api/purchase/material-received')
+    fetchJSON('/api/purchase/monthly-breakdown?fy=' + purchaseSelectedFY),
+    fetchJSON('/api/purchase/bills' + listQuery),
+    fetchJSON('/api/purchase/orders' + listQuery),
+    fetchJSON('/api/purchase/material-received' + listQuery)
   ]);
   const s = summary[0] || {};
   document.getElementById('purchase-spend').textContent = fmtMoney(s.totalSpend);
@@ -729,20 +768,25 @@ async function loadPurchase() {
   document.getElementById('purchase-breakdown-summary').innerHTML =
     `FY total &middot; Bills: <strong>${fmtNum(fyBillTotal)}</strong> &middot; Spend: <strong>${fmtMoney(fySpendTotal)}</strong>`;
 
-  const filterBar = document.getElementById('purchase-month-filter-bar');
-  filterBar.hidden = !purchaseSelectedMonth;
-  const monthLabel = purchaseSelectedMonth ? crmMonthLabel(purchaseSelectedMonth) : '';
-  document.getElementById('purchase-month-filter-label').textContent = monthLabel;
+  const isCompleteSet = !!purchaseSelectedMonth || purchaseViewMode === 'all';
+  const label = purchaseSelectedMonth ? crmMonthLabel(purchaseSelectedMonth) : (purchaseViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10');
+  document.getElementById('purchase-month-filter-label').textContent = label;
+  document.getElementById('purchase-filter-all').hidden = !purchaseSelectedMonth && purchaseViewMode === 'all';
+  document.getElementById('purchase-filter-recent').hidden = !purchaseSelectedMonth && purchaseViewMode === 'recent';
   document.getElementById('purchase-bill-detail-title').textContent = purchaseSelectedMonth
-    ? `Purchase bills — ${monthLabel}` : 'Recent purchase bills';
+    ? `Purchase bills — ${label}` : (purchaseViewMode === 'all' ? `All purchase bills — ${fyText}` : 'Recent purchase bills');
+  document.getElementById('purchase-orders-title').textContent = purchaseSelectedMonth
+    ? `Purchase orders — ${label}` : (purchaseViewMode === 'all' ? `All purchase orders — ${fyText}` : 'Recent purchase orders');
+  document.getElementById('purchase-grn-title').textContent = purchaseSelectedMonth
+    ? `Material received — ${label}` : (purchaseViewMode === 'all' ? `All material received — ${fyText}` : 'Material received (GRN)');
 
   fillTable('table-purchase-bill-detail', bills,
     r => `<tr><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
-  tableSummary('purchase-bill-detail-summary', bills, 'billAmount', 'bill', purchaseSelectedMonth ? 'Total' : 'Total (of rows shown)');
+  tableSummary('purchase-bill-detail-summary', bills, 'billAmount', 'bill', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-purchase-orders', orders,
     r => `<tr><td>${r.poNo ?? ''}</td><td>${r.vendorName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}${moneyTd(r.receivedValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 6);
-  tableSummary('purchase-orders-summary', orders, 'orderValue', 'PO', 'Total (of rows shown)');
+  tableSummary('purchase-orders-summary', orders, 'orderValue', 'PO', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-purchase-grn', materialReceived,
     r => `<tr><td>${r.grnNo ?? ''}</td><td>${r.poNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.receiptDate)}<td>${r.vendorChallanNo ?? ''}</td>${dateTd(r.vendorChallanDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 7);
@@ -751,6 +795,12 @@ async function loadPurchase() {
 
 let invSelectedFY = currentFYStartYear();
 let invFYInitialized = false;
+let invViewMode = 'recent'; // 'recent' (most recent 10, default) or 'all' (every production receipt in the selected FY)
+
+function setInvViewMode(mode) {
+  invViewMode = mode;
+  refreshCurrent();
+}
 
 function initInvFYSelect() {
   if (invFYInitialized) return;
@@ -773,12 +823,13 @@ function initInvFYSelect() {
 async function loadInventory() {
   initInvFYSelect();
   const fyQuery = `?fy=${invSelectedFY}`;
+  const listQuery = invViewMode === 'all' ? `?view=all&fy=${invSelectedFY}` : '';
   const [summary, lowStock, topItems, monthly, productionReceipts] = await Promise.all([
     fetchJSON('/api/inventory/summary'),
     fetchJSON('/api/inventory/low-stock'),
     fetchJSON('/api/inventory/top-items'),
     fetchJSON('/api/inventory/monthly-breakdown' + fyQuery),
-    fetchJSON('/api/inventory/production-receipts')
+    fetchJSON('/api/inventory/production-receipts' + listQuery)
   ]);
   const s = summary[0] || {};
   document.getElementById('inv-skus').textContent = fmtNum(s.totalSkusInStock);
@@ -801,6 +852,11 @@ async function loadInventory() {
   document.getElementById('inv-breakdown-summary').innerHTML =
     `FY total &middot; Received: <strong>${fmtNum(fyReceived)}</strong> &middot; Issued: <strong>${fmtNum(fyIssued)}</strong> &middot; Produced: <strong>${fmtNum(fyProduced)}</strong>`;
 
+  document.getElementById('inv-receipts-filter-label').textContent = invViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10';
+  document.getElementById('inv-receipts-filter-all').hidden = invViewMode === 'all';
+  document.getElementById('inv-receipts-filter-recent').hidden = invViewMode === 'recent';
+  document.getElementById('inv-production-receipts-title').textContent = invViewMode === 'all' ? `All production receipts — ${fyText}` : 'Recent production receipts';
+
   fillTable('table-inv-production-receipts', productionReceipts,
     r => `<tr><td>${r.workOrderNo ?? ''}</td><td>${(r.itemCode || '').trim()}</td>${dateTd(r.receiptDate)}${numTd(r.receiptQty)}<td>${r.statusCode ?? ''}</td></tr>`, 5);
   tableSummary('inv-production-receipts-summary', productionReceipts, null, 'receipt', null);
@@ -817,6 +873,17 @@ function selectFinanceMonth(period) {
 
 function clearFinanceMonth() {
   financeSelectedMonth = null;
+  refreshCurrent();
+}
+
+// Debtors/Creditors have no "recent vs all" concept (always the complete
+// outstanding list) — this mode only governs the purchase-bills list, and
+// only when no month is selected (month selection, via financeSelectedMonth,
+// already overrides it for all three tables).
+let financeViewMode = 'recent'; // 'recent' (most recent 10, default) or 'all' (every bill in the selected FY)
+
+function setFinanceViewMode(mode) {
+  financeViewMode = mode;
   refreshCurrent();
 }
 
@@ -874,13 +941,16 @@ async function loadFinance() {
   initFinanceFYSelect();
   const fyQuery = `?fy=${financeSelectedFY}`;
   const monthQuery = financeSelectedMonth ? `?month=${encodeURIComponent(financeSelectedMonth)}` : '';
+  const billsQuery = financeSelectedMonth
+    ? monthQuery
+    : (financeViewMode === 'all' ? `?view=all&fy=${financeSelectedFY}` : '');
   const [summary, aging, monthly, debtors, creditors, purchaseBills] = await Promise.all([
     fetchJSON('/api/finance/summary'),
     fetchJSON('/api/finance/aging'),
     fetchJSON('/api/finance/monthly-breakdown' + fyQuery),
     fetchJSON('/api/finance/debtors' + monthQuery),
     fetchJSON('/api/finance/creditors' + monthQuery),
-    fetchJSON('/api/finance/purchase-bills' + monthQuery)
+    fetchJSON('/api/finance/purchase-bills' + billsQuery)
   ]);
   const s = summary[0] || {};
   document.getElementById('fin-receivable').textContent = fmtMoney(s.totalReceivable);
@@ -907,8 +977,15 @@ async function loadFinance() {
     ? `Debtors — receivable due in ${monthLabel}` : 'Debtors — outstanding receivable by customer';
   document.getElementById('finance-creditors-title').textContent = financeSelectedMonth
     ? `Creditors — payable due in ${monthLabel}` : 'Creditors — outstanding payable by vendor';
+  const billsFilterBar = document.getElementById('finance-bills-filter-bar');
+  billsFilterBar.hidden = !!financeSelectedMonth; // month selection already covers this via the shared bar above
+  const billsIsCompleteSet = !!financeSelectedMonth || financeViewMode === 'all';
+  const billsLabel = financeSelectedMonth ? monthLabel : (financeViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10');
+  document.getElementById('finance-bills-filter-label').textContent = billsLabel;
+  document.getElementById('finance-bills-filter-all').hidden = financeViewMode === 'all';
+  document.getElementById('finance-bills-filter-recent').hidden = financeViewMode === 'recent';
   document.getElementById('finance-purchase-bills-title').textContent = financeSelectedMonth
-    ? `Purchase bills — ${monthLabel}` : 'Recent purchase bills (expenses)';
+    ? `Purchase bills — ${monthLabel}` : (financeViewMode === 'all' ? `All purchase bills — ${fyText}` : 'Recent purchase bills (expenses)');
 
   fillTable('table-debtors', debtors, r => partyAgingRow(r, 'customerName'), 5);
   tableSummary('finance-debtors-summary', debtors, 'outstandingAmount', 'customer', 'Total outstanding');
@@ -918,12 +995,13 @@ async function loadFinance() {
 
   fillTable('table-purchase-bills', purchaseBills,
     r => `<tr><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
-  tableSummary('finance-purchase-bills-summary', purchaseBills, 'billAmount', 'bill', financeSelectedMonth ? 'Total' : 'Total (of rows shown)');
+  tableSummary('finance-purchase-bills-summary', purchaseBills, 'billAmount', 'bill', billsIsCompleteSet ? 'Total' : 'Total (of rows shown)');
 }
 
 let prodSelectedFY = currentFYStartYear();
 let prodFYInitialized = false;
-let prodSelectedMonth = null; // 'YYYY-MM', or null = show most-recent-50 (default)
+let prodSelectedMonth = null; // 'YYYY-MM', or null = not filtered to a specific month
+let prodViewMode = 'recent'; // 'recent' (most recent 10, default) or 'all' (every record in the selected FY) — governs all 4 tables together, overridden by prodSelectedMonth when set
 
 function initProdFYSelect() {
   if (prodFYInitialized) return;
@@ -948,24 +1026,26 @@ function selectProdMonth(period) {
   refreshCurrent();
 }
 
-function clearProdMonth() {
+function setProdViewMode(mode) {
+  prodViewMode = mode;
   prodSelectedMonth = null;
   refreshCurrent();
 }
 
 async function loadProduction() {
   initProdFYSelect();
-  const fyQuery = `?fy=${prodSelectedFY}`;
-  const monthQuery = prodSelectedMonth ? `?month=${encodeURIComponent(prodSelectedMonth)}` : '';
+  const listQuery = prodSelectedMonth
+    ? `?month=${encodeURIComponent(prodSelectedMonth)}`
+    : (prodViewMode === 'all' ? `?view=all&fy=${prodSelectedFY}` : '');
   const [summary, woStatus, sjoStatus, monthly, oafs, workOrders, materialIssued, readyWorkOrders] = await Promise.all([
     fetchJSON('/api/production/summary'),
     fetchJSON('/api/production/wo-status'),
     fetchJSON('/api/production/sjo-status'),
-    fetchJSON('/api/production/monthly-breakdown' + fyQuery),
-    fetchJSON('/api/production/oafs' + monthQuery),
-    fetchJSON('/api/production/work-orders' + monthQuery),
-    fetchJSON('/api/production/material-issued' + monthQuery),
-    fetchJSON('/api/production/ready-work-orders' + monthQuery)
+    fetchJSON('/api/production/monthly-breakdown?fy=' + prodSelectedFY),
+    fetchJSON('/api/production/oafs' + listQuery),
+    fetchJSON('/api/production/work-orders' + listQuery),
+    fetchJSON('/api/production/material-issued' + listQuery),
+    fetchJSON('/api/production/ready-work-orders' + listQuery)
   ]);
   const s = summary[0] || {};
   document.getElementById('prod-open').textContent = fmtNum(s.openWorkOrders);
@@ -987,18 +1067,18 @@ async function loadProduction() {
   document.getElementById('prod-breakdown-summary').innerHTML =
     `FY total &middot; OAFs: <strong>${fmtNum(fyOaf)}</strong> &middot; Work Orders: <strong>${fmtNum(fyWo)}</strong> &middot; Material Issued: <strong>${fmtNum(fyIssue)}</strong> &middot; Ready: <strong>${fmtNum(fyReady)}</strong>`;
 
-  const filterBar = document.getElementById('prod-month-filter-bar');
-  filterBar.hidden = !prodSelectedMonth;
-  const monthLabel = prodSelectedMonth ? crmMonthLabel(prodSelectedMonth) : '';
-  document.getElementById('prod-month-filter-label').textContent = monthLabel;
+  const label = prodSelectedMonth ? crmMonthLabel(prodSelectedMonth) : (prodViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10');
+  document.getElementById('prod-month-filter-label').textContent = label;
+  document.getElementById('prod-filter-all').hidden = !prodSelectedMonth && prodViewMode === 'all';
+  document.getElementById('prod-filter-recent').hidden = !prodSelectedMonth && prodViewMode === 'recent';
   document.getElementById('prod-oafs-title').textContent = prodSelectedMonth
-    ? `OAFs — ${monthLabel}` : 'Recent Order Acceptance Forms (OAF)';
+    ? `OAFs — ${label}` : (prodViewMode === 'all' ? `All OAFs — ${fyText}` : 'Recent Order Acceptance Forms (OAF)');
   document.getElementById('prod-work-orders-title').textContent = prodSelectedMonth
-    ? `Work Orders — ${monthLabel}` : 'Recent Work Orders';
+    ? `Work Orders — ${label}` : (prodViewMode === 'all' ? `All Work Orders — ${fyText}` : 'Recent Work Orders');
   document.getElementById('prod-material-issued-title').textContent = prodSelectedMonth
-    ? `Material issued — ${monthLabel}` : 'Recent material issued';
+    ? `Material issued — ${label}` : (prodViewMode === 'all' ? `All material issued — ${fyText}` : 'Recent material issued');
   document.getElementById('prod-ready-title').textContent = prodSelectedMonth
-    ? `Ready — ${monthLabel}` : 'Ready (fully received work orders)';
+    ? `Ready — ${label}` : (prodViewMode === 'all' ? `All ready — ${fyText}` : 'Ready (fully received work orders)');
 
   fillTable('table-prod-oafs', oafs,
     r => `<tr><td>${r.oafNo ?? ''}</td>${dateTd(r.oafDate)}<td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerName || ''}</td></tr>`, 4);
@@ -1108,19 +1188,46 @@ document.getElementById('logoutBtn').addEventListener('click', (e) => {
 window.addEventListener('pageshow', (e) => {
   if (e.persisted) location.reload();
 });
-document.getElementById('crm-filter-clear').addEventListener('click', clearCrmMonth);
+document.getElementById('crm-filter-all').addEventListener('click', () => setCrmViewMode('all'));
+document.getElementById('crm-filter-recent').addEventListener('click', () => setCrmViewMode('recent'));
 document.getElementById('lineage-search-btn').addEventListener('click', lineageSearchSubmit);
+document.getElementById('lineage-filter-all').addEventListener('click', () => setLineageViewMode('all'));
 document.getElementById('lineage-clear-btn').addEventListener('click', lineageClearSearch);
 document.getElementById('lineage-month-filter-clear').addEventListener('click', clearLineageMonth);
 document.getElementById('finance-month-filter-clear').addEventListener('click', clearFinanceMonth);
-document.getElementById('purchase-month-filter-clear').addEventListener('click', clearPurchaseMonth);
-document.getElementById('prod-month-filter-clear').addEventListener('click', clearProdMonth);
-document.getElementById('sales-month-filter-clear').addEventListener('click', clearSalesMonth);
+document.getElementById('finance-bills-filter-all').addEventListener('click', () => setFinanceViewMode('all'));
+document.getElementById('finance-bills-filter-recent').addEventListener('click', () => setFinanceViewMode('recent'));
+document.getElementById('purchase-filter-all').addEventListener('click', () => setPurchaseViewMode('all'));
+document.getElementById('purchase-filter-recent').addEventListener('click', () => setPurchaseViewMode('recent'));
+document.getElementById('prod-filter-all').addEventListener('click', () => setProdViewMode('all'));
+document.getElementById('prod-filter-recent').addEventListener('click', () => setProdViewMode('recent'));
+document.getElementById('inv-receipts-filter-all').addEventListener('click', () => setInvViewMode('all'));
+document.getElementById('inv-receipts-filter-recent').addEventListener('click', () => setInvViewMode('recent'));
+document.getElementById('sales-filter-all').addEventListener('click', () => setSalesViewMode('all'));
+document.getElementById('sales-filter-recent').addEventListener('click', () => setSalesViewMode('recent'));
 document.getElementById('lineage-search').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') lineageSearchSubmit();
 });
 
-document.querySelectorAll('.data-table').forEach(t => { initSortableTable(t); initTablePagination(t); });
+// Monthly breakdown tables always have exactly 12 rows (Apr-Mar, one full
+// FY) and are meant to be scanned as a whole calendar year at a glance, so
+// they're exempt from pagination — sorting still applies, but no
+// Prev/Next/rows-per-page control that would hide 2 of the 12 rows behind
+// the default page size.
+const NO_PAGINATION_TABLES = new Set([
+  'table-crm-monthly-breakdown',
+  'table-lineage-monthly-breakdown',
+  'table-sales-monthly-breakdown',
+  'table-purchase-monthly-breakdown',
+  'table-inv-monthly-breakdown',
+  'table-finance-monthly-breakdown',
+  'table-prod-monthly-breakdown'
+]);
+
+document.querySelectorAll('.data-table').forEach(t => {
+  initSortableTable(t);
+  if (!NO_PAGINATION_TABLES.has(t.id)) initTablePagination(t);
+});
 
 checkHealth();
 loadSessionInfo();

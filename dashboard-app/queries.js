@@ -137,7 +137,7 @@ const queries = {
     // /api/finance/purchase-bills route in server.js, which calls this same
     // query) — kept in one place so both panels stay consistent.
     bills: (filtered) => `
-      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         b.XBHAUTOID AS billId,
         CONCAT(b.XBHYEAR, '/', b.XBHGRP, '/', b.XBHNO) AS billNo,
         b.XBHVNDBILLNO AS vendorBillNo,
@@ -160,8 +160,8 @@ const queries = {
     // not merely "confirmed". 'O'/'N' overwhelmingly have no GRN yet.
     // POHRCPVAL (received value so far) is populated and included; POHINVVAL/
     // POHPAIDVAL are NULL on every row in this data, so left out.
-    orders: `
-      SELECT TOP 50
+    orders: (filtered) => `
+      SELECT ${filtered ? '' : 'TOP 10'}
         p.POHAUTOID AS poId,
         CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo,
         v.MVmName AS vendorName,
@@ -178,6 +178,7 @@ const queries = {
         END AS statusLabel
       FROM XPOHEAD p
       LEFT JOIN MVNDMAST v ON p.POHVNDCODE = v.MVmVndCode
+      ${filtered ? 'WHERE p.POHORDDT >= @start AND p.POHORDDT < @end' : ''}
       ORDER BY p.POHORDDT DESC;
     `,
     // Material Received (GRN) report, with the PO number it was received
@@ -190,8 +191,8 @@ const queries = {
     // cross-check against) — 'O' does NOT mean "not yet received": a GRN
     // record only exists once goods are physically receipted, so 'O' more
     // likely reflects the record's own open/not-yet-billed state.
-    materialReceived: `
-      SELECT TOP 50
+    materialReceived: (filtered) => `
+      SELECT ${filtered ? '' : 'TOP 10'}
         h.XGRNHAUTOID AS grnId,
         CONCAT(h.XGRNHORDYR, '/', h.XGRNHGRPCD, '/', h.XGRNHORDNO) AS grnNo,
         po.poNo,
@@ -209,6 +210,7 @@ const queries = {
         JOIN XPOHEAD p ON p.POHAUTOID = d.XGRNDPOID
         WHERE d.XGRNDAUTOID = h.XGRNHAUTOID
       ) po
+      ${filtered ? 'WHERE h.XGRNHORDDT >= @start AND h.XGRNHORDDT < @end' : ''}
       ORDER BY h.XGRNHORDDT DESC;
     `
   },
@@ -299,7 +301,7 @@ const queries = {
     // Production receipts: finished/processed items received back into
     // stock (the "Produced" stage above). Not shown anywhere else in the app.
     productionReceipts: (filtered) => `
-      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         w.XWRHAUTOID AS receiptId,
         w.XWRHWONO AS workOrderNo,
         w.XWRHITMCD AS itemCode,
@@ -533,7 +535,7 @@ const queries = {
       -- XININQSTAT confirmed via cross-check against XINQTNID (quotation link):
       -- Q = Quoted (100% have a quotation), R = Lost/Regret (100% WERE quoted
       -- but didn't convert), O = Open (92% have no quotation yet), D = Dropped.
-      SELECT ${filtered ? 'TOP 200' : 'TOP 15'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         i.XINAUTOID AS enquiryId,
         i.XININQNO AS enquiryNo,
         c.MCMCUSTNM AS customerName,
@@ -562,7 +564,7 @@ const queries = {
       -- link): R = Order Placed / Won (99% converted to a sales order),
       -- O = Open/pending (93% did NOT convert). XQDQUOSTATUS is a submission
       -- sub-status: SB = Submitted, NS = Not Submitted, CN = Cancelled.
-      SELECT ${filtered ? 'TOP 200' : 'TOP 15'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         q.XQDAUTOID AS quotationId,
         q.XQDQTNNO AS quotationNo,
         c.MCMCUSTNM AS customerName,
@@ -604,7 +606,7 @@ const queries = {
       -- a customer's SAP PO number confirm this) — it is NOT the SYNCAXIS
       -- sales order number. The real internal SO number is assembled from
       -- XOBIntOrdYr + XOBIntOrdGrp + XOBIntOrdNo (e.g. "26-27/SO/000098").
-      SELECT ${filtered ? 'TOP 200' : 'TOP 15'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         o.XOBAUTOID AS orderId,
         CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS syncaxisOrderNo,
         o.XOBORDNO AS customerRefNo,
@@ -652,7 +654,7 @@ const queries = {
       -- Sales order traced back via Invoice -> XDCINVDTL -> XOAFHDR -> Order
       -- (same chain used forward on the orders table); confirmed no invoice
       -- in this data spans more than one distinct order, so TOP 1 is safe.
-      SELECT ${filtered ? 'TOP 200' : 'TOP 15'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         h.XDIHAUTOID AS invoiceId,
         h.XDIHINVNO AS invoiceNo,
         c.MCMCUSTNM AS customerName,
@@ -743,7 +745,7 @@ const queries = {
       }
       if (month) conditions.push('o.XOBORDDT >= @start AND o.XOBORDDT < @end');
       return `
-        SELECT ${search || month ? 'TOP 200' : 'TOP 50'}
+        SELECT ${search || month ? '' : 'TOP 10'}
           o.XOBAUTOID AS orderId,
           CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS syncaxisOrderNo,
           o.XOBORDNO AS customerRefNo,
@@ -1051,7 +1053,7 @@ const queries = {
       ORDER BY m.period;
     `,
     oafs: (filtered) => `
-      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         oaf.XOAFHAUTOID AS oafId,
         CONCAT(oaf.XOAFHYEAR, '/', oaf.XOAFHGRPCD, '/', oaf.XOAFHNO) AS oafNo,
         oaf.XOAFHDATE AS oafDate,
@@ -1064,7 +1066,7 @@ const queries = {
       ORDER BY oaf.XOAFHDATE DESC;
     `,
     workOrders: (filtered) => `
-      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         w.XWOAUTOID AS woId,
         CONCAT(w.XWOYR, '/', w.XWOGRCD, '/', w.XWONO) AS woNo,
         w.XWOITMCD AS itemCode,
@@ -1081,7 +1083,7 @@ const queries = {
     // XIHSJOWOTYP = 'S' filter matches lineage.storeIssues — no 'W'-typed
     // (direct-to-work-order) issues exist in this data, only SJO-linked ones.
     materialIssued: (filtered) => `
-      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         i.XIHAUTOID AS issueId,
         i.XIHISSNO AS issueNo,
         i.XIHISSDT AS issueDate,
@@ -1095,7 +1097,7 @@ const queries = {
     `,
     // "Project ready" = fully received (see monthlyBreakdown comment above).
     readyWorkOrders: (filtered) => `
-      SELECT ${filtered ? 'TOP 200' : 'TOP 50'}
+      SELECT ${filtered ? '' : 'TOP 10'}
         w.XWOAUTOID AS woId,
         CONCAT(w.XWOYR, '/', w.XWOGRCD, '/', w.XWONO) AS woNo,
         w.XWOITMCD AS itemCode,

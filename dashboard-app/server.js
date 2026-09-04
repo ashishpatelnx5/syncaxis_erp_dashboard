@@ -117,6 +117,20 @@ function parseFYRange(fyStr) {
   };
 }
 
+// Resolves the date range for a "recent-*" list route: an explicit month
+// (clicking a row in a monthly breakdown table) takes priority; otherwise
+// ?view=all scopes to the whole selected FY; otherwise (default) unfiltered
+// "most recent N" with no date range at all.
+function recentListRange(req) {
+  const month = parseMonthRange(req.query.month);
+  if (month) return { filtered: true, params: { start: month.start, end: month.end } };
+  if (req.query.view === 'all') {
+    const fy = parseFYRange(req.query.fy);
+    return { filtered: true, params: { start: fy.start, end: fy.end } };
+  }
+  return { filtered: false, params: null };
+}
+
 // ---------- Sales ----------
 app.get('/api/sales/summary', (req, res) => runQuery(res, queries.sales.summary));
 app.get('/api/sales/trend', (req, res) => runQuery(res, queries.sales.trend));
@@ -129,8 +143,8 @@ app.get('/api/sales/monthly-breakdown', (req, res) => {
 // Pipeline's invoice stage already reads) — kept in one place so both
 // panels stay consistent, same pattern as queries.purchase.bills.
 app.get('/api/sales/invoices', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.crm.recentInvoices(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.crm.recentInvoices(filtered), params);
 });
 
 // ---------- CRM (Enquiry / Quotation / Sales Order / Follow-up) ----------
@@ -147,30 +161,35 @@ app.get('/api/crm/monthly-breakdown', (req, res) => {
   runQuery(res, queries.crm.monthlyBreakdown, { start: fy.start, end: fy.end });
 });
 app.get('/api/crm/recent-enquiries', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.crm.recentEnquiries(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.crm.recentEnquiries(filtered), params);
 });
 app.get('/api/crm/recent-quotations', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.crm.recentQuotations(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.crm.recentQuotations(filtered), params);
 });
 app.get('/api/crm/recent-orders', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.crm.recentOrders(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.crm.recentOrders(filtered), params);
 });
 app.get('/api/crm/recent-invoices', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.crm.recentInvoices(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.crm.recentInvoices(filtered), params);
 });
 app.get('/api/crm/pending-followups', (req, res) => runQuery(res, queries.crm.pendingFollowups));
 
 // ---------- Order Lineage (end-to-end genealogy for one sales order) ----------
 app.get('/api/lineage/orders', (req, res) => {
   const search = (req.query.search || '').trim() || null;
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.lineage.orderList(!!search, !!range), {
+  const month = parseMonthRange(req.query.month);
+  // orderList's SQL only cares whether a date range applies at all — a
+  // specific month and "the whole selected FY" (view=all) bind the exact
+  // same WHERE clause, just with different @start/@end values.
+  const fy = (!search && !month && req.query.view === 'all') ? parseFYRange(req.query.fy) : null;
+  const dateRange = month || fy;
+  runQuery(res, queries.lineage.orderList(!!search, !!dateRange), {
     ...(search && { search }),
-    ...(range && { start: range.start, end: range.end })
+    ...(dateRange && { start: dateRange.start, end: dateRange.end })
   });
 });
 app.get('/api/lineage/monthly-breakdown', (req, res) => {
@@ -218,11 +237,17 @@ app.get('/api/purchase/monthly-breakdown', (req, res) => {
   runQuery(res, queries.purchase.monthlyBreakdown, { start: fy.start, end: fy.end });
 });
 app.get('/api/purchase/bills', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.purchase.bills(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.purchase.bills(filtered), params);
 });
-app.get('/api/purchase/orders', (req, res) => runQuery(res, queries.purchase.orders));
-app.get('/api/purchase/material-received', (req, res) => runQuery(res, queries.purchase.materialReceived));
+app.get('/api/purchase/orders', (req, res) => {
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.purchase.orders(filtered), params);
+});
+app.get('/api/purchase/material-received', (req, res) => {
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.purchase.materialReceived(filtered), params);
+});
 
 // ---------- Inventory ----------
 app.get('/api/inventory/summary', (req, res) => runQuery(res, queries.inventory.summary));
@@ -233,8 +258,8 @@ app.get('/api/inventory/monthly-breakdown', (req, res) => {
   runQuery(res, queries.inventory.monthlyBreakdown, { start: fy.start, end: fy.end });
 });
 app.get('/api/inventory/production-receipts', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.inventory.productionReceipts(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.inventory.productionReceipts(filtered), params);
 });
 
 // ---------- Finance ----------
@@ -253,8 +278,8 @@ app.get('/api/finance/creditors', (req, res) => {
   runQuery(res, queries.finance.creditors(!!range), range && { start: range.start, end: range.end });
 });
 app.get('/api/finance/purchase-bills', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.purchase.bills(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.purchase.bills(filtered), params);
 });
 
 // ---------- Production ----------
@@ -266,20 +291,20 @@ app.get('/api/production/monthly-breakdown', (req, res) => {
   runQuery(res, queries.production.monthlyBreakdown, { start: fy.start, end: fy.end });
 });
 app.get('/api/production/oafs', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.production.oafs(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.production.oafs(filtered), params);
 });
 app.get('/api/production/work-orders', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.production.workOrders(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.production.workOrders(filtered), params);
 });
 app.get('/api/production/material-issued', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.production.materialIssued(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.production.materialIssued(filtered), params);
 });
 app.get('/api/production/ready-work-orders', (req, res) => {
-  const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.production.readyWorkOrders(!!range), range && { start: range.start, end: range.end });
+  const { filtered, params } = recentListRange(req);
+  runQuery(res, queries.production.readyWorkOrders(filtered), params);
 });
 
 // Health check — quick way to confirm the DB connection works at all
