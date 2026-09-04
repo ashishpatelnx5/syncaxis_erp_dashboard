@@ -2,5 +2,10 @@
 node_modules/
 
 # Real database credentials — never commit these
-dashboard-app/dashboard-app/.env
-dashboard-app/dashboard-app/setup-readonly-login.sql
+dashboard-app/.env
+dashboard-app/setup-readonly-login.sql
+
+# Runtime artifacts from start.ps1/stop.ps1
+.syncaxis-dashboard.pid
+dashboard-app.log
+dashboard-app.err.log

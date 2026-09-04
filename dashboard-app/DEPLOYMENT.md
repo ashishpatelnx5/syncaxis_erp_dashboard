@@ -23,13 +23,13 @@ on a Windows Server in the office LAN. Run these directly on that server
 access token when prompted for a password):
 ```
 git clone https://github.com/ashishpatelnx5/syncaxis_erp_dashboard.git
-cd syncaxis_erp_dashboard\dashboard-app\dashboard-app
+cd syncaxis_erp_dashboard\dashboard-app
 ```
 
 **Option B — copy manually** (simpler if you don't want git on the server):
-copy the whole `dashboard-app\dashboard-app` folder over a network share, USB
-drive, or RDP clipboard/file transfer to e.g. `C:\Apps\syncaxis-dashboard`,
-then `cd` into it.
+copy the whole `dashboard-app` folder over a network share, USB drive, or RDP
+clipboard/file transfer to e.g. `C:\Apps\syncaxis-dashboard`, then `cd` into
+it.
 
 ## 2. Install dependencies
 
