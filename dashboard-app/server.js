@@ -271,11 +271,35 @@ app.get('/api/finance/monthly-breakdown', (req, res) => {
 });
 app.get('/api/finance/debtors', (req, res) => {
   const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.finance.debtors(!!range), range && { start: range.start, end: range.end });
+  runQuery(res, queries.finance.debtors(!!range, req.query.view === 'all'), range && { start: range.start, end: range.end });
 });
 app.get('/api/finance/creditors', (req, res) => {
   const range = parseMonthRange(req.query.month);
-  runQuery(res, queries.finance.creditors(!!range), range && { start: range.start, end: range.end });
+  runQuery(res, queries.finance.creditors(!!range, req.query.view === 'all'), range && { start: range.start, end: range.end });
+});
+// fy=all (or omitted) means "this party's entire history, no year filter" —
+// the default, so an old customer/vendor doesn't look broken just because
+// the current FY happens to have nothing for them. Pass a specific year to
+// narrow it down.
+app.get('/api/finance/debtors/:code/orders-invoices', (req, res) => {
+  const filtered = /^\d{4}$/.test(req.query.fy || '');
+  const params = { accountCode: req.params.code };
+  if (filtered) {
+    const fy = parseFYRange(req.query.fy);
+    params.start = fy.start;
+    params.end = fy.end;
+  }
+  runQuery(res, queries.finance.customerOrdersAndInvoices(filtered), params);
+});
+app.get('/api/finance/creditors/:code/orders-bills', (req, res) => {
+  const filtered = /^\d{4}$/.test(req.query.fy || '');
+  const params = { accountCode: req.params.code };
+  if (filtered) {
+    const fy = parseFYRange(req.query.fy);
+    params.start = fy.start;
+    params.end = fy.end;
+  }
+  runQuery(res, queries.finance.vendorOrdersAndBills(filtered), params);
 });
 app.get('/api/finance/purchase-bills', (req, res) => {
   const { filtered, params } = recentListRange(req);

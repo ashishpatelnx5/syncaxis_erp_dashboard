@@ -273,6 +273,10 @@ body {
   gap: 20px;
 }
 
+.grid-1[hidden] {
+  display: none;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -353,6 +357,10 @@ body {
 
 .data-table tbody tr:hover {
   background: var(--bg);
+}
+
+.data-table tbody tr.clickable-row {
+  cursor: pointer;
 }
 
 .data-table td.num {
@@ -485,6 +493,10 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
+}
+
+.crm-filter-bar[hidden] {
+  display: none;
 }
 
 .btn-link {

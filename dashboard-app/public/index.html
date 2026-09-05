@@ -435,9 +435,15 @@
         Showing: <strong id="finance-month-filter-label"></strong>
         <button id="finance-month-filter-clear" class="btn-link">Show current outstanding instead</button>
       </div>
+      <div class="crm-filter-bar" id="finance-debtors-filter-bar">
+        Showing: <strong id="finance-debtors-filter-label"></strong>
+        <button id="finance-debtors-filter-all" class="btn-link">Show all</button>
+        <button id="finance-debtors-filter-recent" class="btn-link">Show most recent</button>
+      </div>
       <div class="grid-1">
         <div class="card">
           <h3 id="finance-debtors-title">Debtors — outstanding receivable by customer</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Click a row to see this customer's Sales Orders &amp; Invoices.</p>
           <div class="table-summary" id="finance-debtors-summary"></div>
           <table class="data-table" id="table-debtors">
             <thead><tr><th>Customer</th><th>Outstanding</th><th>Oldest due date</th><th>Days overdue</th><th>Entries</th></tr></thead>
@@ -445,12 +451,41 @@
           </table>
         </div>
       </div>
+      <div class="grid-1" id="finance-debtor-detail-wrap" hidden>
+        <div class="card">
+          <h3 id="finance-debtor-detail-title">Sales Orders &amp; Invoices</h3>
+          <p class="muted" id="finance-debtor-detail-subtitle" style="margin: -4px 0 10px; font-size: 12.5px;"></p>
+          <div class="crm-fy-bar">
+            <label for="finance-debtor-detail-fy">Financial year</label>
+            <select id="finance-debtor-detail-fy"></select>
+          </div>
+          <table class="data-table" id="table-finance-debtor-history">
+            <thead><tr><th>SO No.</th><th>SO Date</th><th>SO Value</th><th>Status</th><th>Invoice No.</th><th>Invoice Date</th><th>Invoice Amount</th><th>Invoice Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
       <div class="grid-1">
         <div class="card">
           <h3 id="finance-creditors-title">Creditors — outstanding payable by vendor</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Click a row to see this vendor's Purchase Orders &amp; Bills.</p>
           <div class="table-summary" id="finance-creditors-summary"></div>
           <table class="data-table" id="table-creditors">
             <thead><tr><th>Vendor</th><th>Outstanding</th><th>Oldest due date</th><th>Days overdue</th><th>Entries</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1" id="finance-creditor-detail-wrap" hidden>
+        <div class="card">
+          <h3 id="finance-creditor-detail-title">Purchase Orders &amp; Bills</h3>
+          <p class="muted" id="finance-creditor-detail-subtitle" style="margin: -4px 0 10px; font-size: 12.5px;"></p>
+          <div class="crm-fy-bar">
+            <label for="finance-creditor-detail-fy">Financial year</label>
+            <select id="finance-creditor-detail-fy"></select>
+          </div>
+          <table class="data-table" id="table-finance-creditor-history">
+            <thead><tr><th>PO No.</th><th>PO Date</th><th>PO Value</th><th>Status</th><th>Bill No.</th><th>Vendor Bill No.</th><th>Bill Date</th><th>Bill Amount</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>

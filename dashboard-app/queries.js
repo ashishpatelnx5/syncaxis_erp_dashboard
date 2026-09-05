@@ -395,8 +395,14 @@ const queries = {
     // the caller's @start/@end month, and the aggregates (amount, oldest due
     // date, entry count) are then scoped to just that month's entries — i.e.
     // "what this customer owes that's due in month X", not their full balance.
-    debtors: (filtered) => `
-      SELECT
+    // `showAll` caps the default (unfiltered, no month selected) view at the
+    // top 10 by outstanding amount — same "Most recent"/"Show all" pattern
+    // used everywhere else in this app, applied here to the biggest balances
+    // instead of the newest date (there's no transaction date to sort by on
+    // this snapshot-of-current-balance table). Ignored when `filtered` (a
+    // month was clicked): that view already shows every matching entry.
+    debtors: (filtered, showAll) => `
+      SELECT ${(!filtered && !showAll) ? 'TOP 10' : ''}
         ISNULL(c.MCMCUSTNM, o.XOH_ACCCD) AS customerName,
         o.XOH_ACCCD AS customerCode,
         SUM(o.XOH_TRN_AMT_DOM - o.XOH_ADJ_AMT_DOM) AS outstandingAmount,
@@ -416,8 +422,8 @@ const queries = {
     // joins XOUTSTNDHDR to MVNDMAST) — if vendorName comes back as the raw
     // account code for most/all rows, the account-code namespace likely
     // doesn't line up 1:1 with MVmVndCode; see diagnostics.sql query 10.
-    creditors: (filtered) => `
-      SELECT
+    creditors: (filtered, showAll) => `
+      SELECT ${(!filtered && !showAll) ? 'TOP 10' : ''}
         ISNULL(v.MVmName, o.XOH_ACCCD) AS vendorName,
         o.XOH_ACCCD AS vendorCode,
         SUM(o.XOH_TRN_AMT_DOM - o.XOH_ADJ_AMT_DOM) AS outstandingAmount,
@@ -435,6 +441,82 @@ const queries = {
     // Expenses: full purchase-bill list — see queries.purchase.bills (shared
     // with the Purchase & Vendors panel's own bill-detail report, so both
     // stay consistent instead of maintaining two copies of the same query).
+
+    // Sales Orders & Invoices for one specific customer, one row per SO (or
+    // per SO+Invoice pair when an order has been invoiced) — a genuine join,
+    // not a guess: Order -> XOAFHDR (Order Acceptance Form) -> XDCINVDTL ->
+    // XDCINVHDR, the same chain already verified end-to-end in
+    // crm.recentOrders/recentInvoices. (Separate from the debtor/creditor
+    // outstanding-balance rows above — XOUTSTNDHDR has no reliable per-invoice
+    // link, see the customerAR note in lineage below — so this is scoped by
+    // account code + financial year instead, as its own reference view.)
+    // OUTER APPLY keeps orders with no invoice yet (all invoice columns null)
+    // and repeats the order once per invoice if it was invoiced more than once.
+    customerOrdersAndInvoices: (filtered) => `
+      SELECT
+        CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS soNo,
+        o.XOBORDDT AS soDate,
+        o.XOBTOTDMCY AS soValue,
+        CASE o.XOBORDSTAT
+          WHEN 'C' THEN 'Confirmed'
+          WHEN 'A' THEN 'Amended'
+          WHEN 'N' THEN 'New'
+          WHEN 'D' THEN 'Deleted'
+          WHEN 'O' THEN 'On Hold'
+          ELSE o.XOBORDSTAT
+        END AS soStatus,
+        inv.invoiceNo,
+        inv.invoiceDate,
+        inv.invoiceValue,
+        inv.invoiceStatus
+      FROM XORDDTL o
+      OUTER APPLY (
+        SELECT DISTINCT ih.XDIHINVNO AS invoiceNo, ih.XDIHINVDT AS invoiceDate, ih.XDIHAMT AS invoiceValue, ih.XDIHSTATUS AS invoiceStatus
+        FROM XOAFHDR oaf
+        JOIN XDCINVDTL id ON id.XDIDOAFID = oaf.XOAFHAUTOID
+        JOIN XDCINVHDR ih ON id.XDIDREFID = ih.XDIHAUTOID
+        WHERE oaf.XOAFHORDID = o.XOBAUTOID
+      ) inv
+      WHERE o.XOBCUSTCD = @accountCode
+      ${filtered ? 'AND o.XOBORDDT >= @start AND o.XOBORDDT < @end' : ''}
+      ORDER BY o.XOBORDDT DESC;
+    `,
+    // Purchase Orders & Bills for one specific vendor, mirroring
+    // customerOrdersAndInvoices above. Also a genuine, verified join — PO ->
+    // XPURBILLGRNDTL (bill's GRN detail lines carry XBGPOID) -> XPURBILLHDR —
+    // checked against live data: 1159/1275 GRN-detail rows with a non-zero
+    // XBGPOID have their bill's vendor match the PO's vendor exactly (the
+    // remainder are most likely consolidated/split bills, an existing data
+    // quality quirk, not a join error). XBGPOID = '0' on ~20% of rows means
+    // "not linked to a PO" and is excluded, same idea as XOH_BILLNO being
+    // blank elsewhere in this data.
+    vendorOrdersAndBills: (filtered) => `
+      SELECT
+        CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo,
+        p.POHORDDT AS poDate,
+        p.POHNETVAL AS poValue,
+        CASE p.POHSTATUS
+          WHEN 'C' THEN 'Closed'
+          WHEN 'O' THEN 'Open'
+          WHEN 'N' THEN 'New'
+          WHEN 'D' THEN 'Cancelled'
+          ELSE p.POHSTATUS
+        END AS poStatus,
+        bill.billNo,
+        bill.billDate,
+        bill.billAmount,
+        bill.vendorBillNo
+      FROM XPOHEAD p
+      OUTER APPLY (
+        SELECT DISTINCT CONCAT(b.XBHYEAR, '/', b.XBHGRP, '/', b.XBHNO) AS billNo, b.XBHDOCDT AS billDate, b.XBHACTBILLAMT AS billAmount, b.XBHVNDBILLNO AS vendorBillNo
+        FROM XPURBILLGRNDTL g
+        JOIN XPURBILLHDR b ON g.XBGREFID = b.XBHAUTOID
+        WHERE g.XBGPOID = p.POHAUTOID AND g.XBGPOID <> '0'
+      ) bill
+      WHERE p.POHVNDCODE = @accountCode
+      ${filtered ? 'AND p.POHORDDT >= @start AND p.POHORDDT < @end' : ''}
+      ORDER BY p.POHORDDT DESC;
+    `
   },
 
   // ---------------- CRM: ENQUIRY -> QUOTATION -> SALES ORDER -> FOLLOW-UP ----------------

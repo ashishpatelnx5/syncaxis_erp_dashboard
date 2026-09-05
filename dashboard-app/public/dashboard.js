@@ -354,7 +354,7 @@ async function loadCRM() {
   // A complete data set (no arbitrary row cap) when a month is selected or
   // when in "all" mode — only "recent" mode is genuinely a capped subset.
   const isCompleteSet = !!crmSelectedMonth || crmViewMode === 'all';
-  const label = crmSelectedMonth ? crmMonthLabel(crmSelectedMonth) : (crmViewMode === 'all' ? `All — ${fyText}` : 'Most recent 15');
+  const label = crmSelectedMonth ? crmMonthLabel(crmSelectedMonth) : (crmViewMode === 'all' ? `All — ${fyText}` : 'Most recent');
   document.getElementById('crm-filter-label').textContent = label;
   document.getElementById('crm-filter-all').hidden = !crmSelectedMonth && crmViewMode === 'all';
   document.getElementById('crm-filter-recent').hidden = !crmSelectedMonth && crmViewMode === 'recent';
@@ -688,7 +688,7 @@ async function loadSales() {
     `FY total &middot; Invoices: <strong>${fmtNum(fyInvoiceTotal)}</strong> &middot; Revenue: <strong>${fmtMoney(fyRevenueTotal)}</strong>`;
 
   const isCompleteSet = !!salesSelectedMonth || salesViewMode === 'all';
-  const label = salesSelectedMonth ? crmMonthLabel(salesSelectedMonth) : (salesViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10');
+  const label = salesSelectedMonth ? crmMonthLabel(salesSelectedMonth) : (salesViewMode === 'all' ? `All — ${fyText}` : 'Most recent');
   document.getElementById('sales-month-filter-label').textContent = label;
   document.getElementById('sales-filter-all').hidden = !salesSelectedMonth && salesViewMode === 'all';
   document.getElementById('sales-filter-recent').hidden = !salesSelectedMonth && salesViewMode === 'recent';
@@ -769,7 +769,7 @@ async function loadPurchase() {
     `FY total &middot; Bills: <strong>${fmtNum(fyBillTotal)}</strong> &middot; Spend: <strong>${fmtMoney(fySpendTotal)}</strong>`;
 
   const isCompleteSet = !!purchaseSelectedMonth || purchaseViewMode === 'all';
-  const label = purchaseSelectedMonth ? crmMonthLabel(purchaseSelectedMonth) : (purchaseViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10');
+  const label = purchaseSelectedMonth ? crmMonthLabel(purchaseSelectedMonth) : (purchaseViewMode === 'all' ? `All — ${fyText}` : 'Most recent');
   document.getElementById('purchase-month-filter-label').textContent = label;
   document.getElementById('purchase-filter-all').hidden = !purchaseSelectedMonth && purchaseViewMode === 'all';
   document.getElementById('purchase-filter-recent').hidden = !purchaseSelectedMonth && purchaseViewMode === 'recent';
@@ -852,7 +852,7 @@ async function loadInventory() {
   document.getElementById('inv-breakdown-summary').innerHTML =
     `FY total &middot; Received: <strong>${fmtNum(fyReceived)}</strong> &middot; Issued: <strong>${fmtNum(fyIssued)}</strong> &middot; Produced: <strong>${fmtNum(fyProduced)}</strong>`;
 
-  document.getElementById('inv-receipts-filter-label').textContent = invViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10';
+  document.getElementById('inv-receipts-filter-label').textContent = invViewMode === 'all' ? `All — ${fyText}` : 'Most recent';
   document.getElementById('inv-receipts-filter-all').hidden = invViewMode === 'all';
   document.getElementById('inv-receipts-filter-recent').hidden = invViewMode === 'recent';
   document.getElementById('inv-production-receipts-title').textContent = invViewMode === 'all' ? `All production receipts — ${fyText}` : 'Recent production receipts';
@@ -876,14 +876,23 @@ function clearFinanceMonth() {
   refreshCurrent();
 }
 
-// Debtors/Creditors have no "recent vs all" concept (always the complete
-// outstanding list) — this mode only governs the purchase-bills list, and
-// only when no month is selected (month selection, via financeSelectedMonth,
-// already overrides it for all three tables).
+// Governs the purchase-bills list only, and only when no month is selected
+// (month selection, via financeSelectedMonth, already overrides it).
 let financeViewMode = 'recent'; // 'recent' (most recent 10, default) or 'all' (every bill in the selected FY)
 
 function setFinanceViewMode(mode) {
   financeViewMode = mode;
+  refreshCurrent();
+}
+
+// Governs the Debtors/Creditors tables (top 10 by outstanding amount vs
+// every current balance) — separately from financeViewMode above since bills
+// are date-scoped by FY while these are a snapshot of currently outstanding
+// balances with no date to filter by. Also overridden by financeSelectedMonth.
+let financeDebtorsViewMode = 'recent'; // 'recent' (top 10, default) or 'all'
+
+function setFinanceDebtorsViewMode(mode) {
+  financeDebtorsViewMode = mode;
   refreshCurrent();
 }
 
@@ -930,12 +939,109 @@ function tableSummary(elId, rows, valueKey, noun, label) {
   el.innerHTML = `${countText} &middot; ${label}: <strong>${fmtMoney(total)}</strong>`;
 }
 
-function partyAgingRow(r, nameKey) {
+// codeKey/nameKey read the row's account code + display name; onClickFn is
+// the name of a global function (viewDebtorEntries/viewCreditorEntries)
+// called with both, URL-encoded so names/codes containing quotes can't
+// break the inline onclick attribute.
+function partyAgingRow(r, nameKey, codeKey, onClickFn) {
   const overdue = r.daysOverdue != null ? Number(r.daysOverdue) : null;
   const overdueDisplay = overdue == null ? '—' : (overdue <= 0 ? 'Not yet due' : `${fmtNum(overdue)} days`);
   const overdueSort = overdue == null ? -Infinity : overdue;
-  return `<tr><td>${r[nameKey] ?? ''}</td>${moneyTd(r.outstandingAmount)}${dateTd(r.oldestDueDate)}${td(overdueDisplay, overdueSort, 'num')}${numTd(r.entryCount)}</tr>`;
+  const code = encodeURIComponent(r[codeKey] ?? '');
+  const name = encodeURIComponent((r[nameKey] ?? '').trim());
+  return `<tr class="clickable-row" onclick="${onClickFn}('${code}','${name}')"><td>${r[nameKey] ?? ''}</td>${moneyTd(r.outstandingAmount)}${dateTd(r.oldestDueDate)}${td(overdueDisplay, overdueSort, 'num')}${numTd(r.entryCount)}</tr>`;
 }
+
+// The currently open party detail (debtor or creditor). Its Financial year
+// filter is independent of the panel-wide finance-fy-select — defaulting to
+// 'all' (this party's entire history) avoids a customer/vendor looking
+// "broken" just because their activity predates the current FY (e.g. an old
+// outstanding balance with no recent orders). Narrow it via the select next
+// to the table if needed.
+let financeOpenParty = null; // { kind: 'debtor'|'creditor', code, name, fy } or null
+
+let financeDebtorDetailFYInitialized = false;
+function initFinanceDebtorDetailFYSelect() {
+  if (financeDebtorDetailFYInitialized) return;
+  financeDebtorDetailFYInitialized = true;
+  const select = document.getElementById('finance-debtor-detail-fy');
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all';
+  allOpt.textContent = 'All years';
+  select.appendChild(allOpt);
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => {
+    if (financeOpenParty) financeOpenParty.fy = select.value;
+    loadPartyHistory();
+  });
+}
+
+let financeCreditorDetailFYInitialized = false;
+function initFinanceCreditorDetailFYSelect() {
+  if (financeCreditorDetailFYInitialized) return;
+  financeCreditorDetailFYInitialized = true;
+  const select = document.getElementById('finance-creditor-detail-fy');
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all';
+  allOpt.textContent = 'All years';
+  select.appendChild(allOpt);
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => {
+    if (financeOpenParty) financeOpenParty.fy = select.value;
+    loadPartyHistory();
+  });
+}
+
+async function viewPartyEntries(kind, codeEnc, nameEnc) {
+  const code = decodeURIComponent(codeEnc);
+  const name = decodeURIComponent(nameEnc);
+  financeOpenParty = { kind, code, name, fy: 'all' };
+  if (kind === 'debtor') initFinanceDebtorDetailFYSelect(); else initFinanceCreditorDetailFYSelect();
+  document.getElementById(`finance-${kind}-detail-fy`).value = 'all';
+  const wrap = document.getElementById(`finance-${kind}-detail-wrap`);
+  wrap.hidden = false;
+  document.getElementById(`finance-${kind}-detail-subtitle`).textContent = name || code;
+  await loadPartyHistory();
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Sales Orders & Invoices (or Purchase Orders & Bills) for whichever party is
+// currently open, scoped to financeOpenParty.fy — a genuine join (Order->OAF
+// ->Invoice / PO->GRN detail->Bill, see queries.js), one row per order with
+// its invoice/bill columns blank when it hasn't been invoiced/billed yet.
+async function loadPartyHistory() {
+  if (!financeOpenParty) return;
+  const { kind, code, fy } = financeOpenParty;
+  const encCode = encodeURIComponent(code);
+  if (kind === 'debtor') {
+    try {
+      const rows = await fetchJSON(`/api/finance/debtors/${encCode}/orders-invoices?fy=${fy}`);
+      fillTable('table-finance-debtor-history', rows,
+        r => `<tr><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}${moneyTd(r.soValue)}<td>${r.soStatus ?? ''}</td><td>${r.invoiceNo ?? '—'}</td>${r.invoiceNo ? dateTd(r.invoiceDate) : '<td>—</td>'}${r.invoiceNo ? moneyTd(r.invoiceValue) : '<td>—</td>'}<td>${r.invoiceNo ? (r.invoiceStatus ?? '') : '—'}</td></tr>`, 8);
+    } catch (err) { console.error(err); }
+  } else {
+    try {
+      const rows = await fetchJSON(`/api/finance/creditors/${encCode}/orders-bills?fy=${fy}`);
+      fillTable('table-finance-creditor-history', rows,
+        r => `<tr><td>${r.poNo ?? ''}</td>${dateTd(r.poDate)}${moneyTd(r.poValue)}<td>${r.poStatus ?? ''}</td><td>${r.billNo ?? '—'}</td><td>${r.billNo ? (r.vendorBillNo ?? '') : '—'}</td>${r.billNo ? dateTd(r.billDate) : '<td>—</td>'}${r.billNo ? moneyTd(r.billAmount) : '<td>—</td>'}</tr>`, 8);
+    } catch (err) { console.error(err); }
+  }
+}
+
+function viewDebtorEntries(codeEnc, nameEnc) { viewPartyEntries('debtor', codeEnc, nameEnc); }
+function viewCreditorEntries(codeEnc, nameEnc) { viewPartyEntries('creditor', codeEnc, nameEnc); }
 
 async function loadFinance() {
   initFinanceFYSelect();
@@ -944,12 +1050,15 @@ async function loadFinance() {
   const billsQuery = financeSelectedMonth
     ? monthQuery
     : (financeViewMode === 'all' ? `?view=all&fy=${financeSelectedFY}` : '');
+  const debtorsQuery = financeSelectedMonth
+    ? monthQuery
+    : (financeDebtorsViewMode === 'all' ? '?view=all' : '');
   const [summary, aging, monthly, debtors, creditors, purchaseBills] = await Promise.all([
     fetchJSON('/api/finance/summary'),
     fetchJSON('/api/finance/aging'),
     fetchJSON('/api/finance/monthly-breakdown' + fyQuery),
-    fetchJSON('/api/finance/debtors' + monthQuery),
-    fetchJSON('/api/finance/creditors' + monthQuery),
+    fetchJSON('/api/finance/debtors' + debtorsQuery),
+    fetchJSON('/api/finance/creditors' + debtorsQuery),
     fetchJSON('/api/finance/purchase-bills' + billsQuery)
   ]);
   const s = summary[0] || {};
@@ -977,21 +1086,28 @@ async function loadFinance() {
     ? `Debtors — receivable due in ${monthLabel}` : 'Debtors — outstanding receivable by customer';
   document.getElementById('finance-creditors-title').textContent = financeSelectedMonth
     ? `Creditors — payable due in ${monthLabel}` : 'Creditors — outstanding payable by vendor';
+  const debtorsFilterBar = document.getElementById('finance-debtors-filter-bar');
+  debtorsFilterBar.hidden = !!financeSelectedMonth; // month selection already covers this via the shared bar above
+  const debtorsIsCompleteSet = !!financeSelectedMonth || financeDebtorsViewMode === 'all';
+  const debtorsLabel = financeSelectedMonth ? monthLabel : (financeDebtorsViewMode === 'all' ? 'All' : 'Most recent');
+  document.getElementById('finance-debtors-filter-label').textContent = debtorsLabel;
+  document.getElementById('finance-debtors-filter-all').hidden = financeDebtorsViewMode === 'all';
+  document.getElementById('finance-debtors-filter-recent').hidden = financeDebtorsViewMode === 'recent';
   const billsFilterBar = document.getElementById('finance-bills-filter-bar');
   billsFilterBar.hidden = !!financeSelectedMonth; // month selection already covers this via the shared bar above
   const billsIsCompleteSet = !!financeSelectedMonth || financeViewMode === 'all';
-  const billsLabel = financeSelectedMonth ? monthLabel : (financeViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10');
+  const billsLabel = financeSelectedMonth ? monthLabel : (financeViewMode === 'all' ? `All — ${fyText}` : 'Most recent');
   document.getElementById('finance-bills-filter-label').textContent = billsLabel;
   document.getElementById('finance-bills-filter-all').hidden = financeViewMode === 'all';
   document.getElementById('finance-bills-filter-recent').hidden = financeViewMode === 'recent';
   document.getElementById('finance-purchase-bills-title').textContent = financeSelectedMonth
     ? `Purchase bills — ${monthLabel}` : (financeViewMode === 'all' ? `All purchase bills — ${fyText}` : 'Recent purchase bills (expenses)');
 
-  fillTable('table-debtors', debtors, r => partyAgingRow(r, 'customerName'), 5);
-  tableSummary('finance-debtors-summary', debtors, 'outstandingAmount', 'customer', 'Total outstanding');
+  fillTable('table-debtors', debtors, r => partyAgingRow(r, 'customerName', 'customerCode', 'viewDebtorEntries'), 5);
+  tableSummary('finance-debtors-summary', debtors, 'outstandingAmount', 'customer', debtorsIsCompleteSet ? 'Total outstanding' : 'Total outstanding (of rows shown)');
 
-  fillTable('table-creditors', creditors, r => partyAgingRow(r, 'vendorName'), 5);
-  tableSummary('finance-creditors-summary', creditors, 'outstandingAmount', 'vendor', 'Total outstanding');
+  fillTable('table-creditors', creditors, r => partyAgingRow(r, 'vendorName', 'vendorCode', 'viewCreditorEntries'), 5);
+  tableSummary('finance-creditors-summary', creditors, 'outstandingAmount', 'vendor', debtorsIsCompleteSet ? 'Total outstanding' : 'Total outstanding (of rows shown)');
 
   fillTable('table-purchase-bills', purchaseBills,
     r => `<tr><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
@@ -1067,7 +1183,7 @@ async function loadProduction() {
   document.getElementById('prod-breakdown-summary').innerHTML =
     `FY total &middot; OAFs: <strong>${fmtNum(fyOaf)}</strong> &middot; Work Orders: <strong>${fmtNum(fyWo)}</strong> &middot; Material Issued: <strong>${fmtNum(fyIssue)}</strong> &middot; Ready: <strong>${fmtNum(fyReady)}</strong>`;
 
-  const label = prodSelectedMonth ? crmMonthLabel(prodSelectedMonth) : (prodViewMode === 'all' ? `All — ${fyText}` : 'Most recent 10');
+  const label = prodSelectedMonth ? crmMonthLabel(prodSelectedMonth) : (prodViewMode === 'all' ? `All — ${fyText}` : 'Most recent');
   document.getElementById('prod-month-filter-label').textContent = label;
   document.getElementById('prod-filter-all').hidden = !prodSelectedMonth && prodViewMode === 'all';
   document.getElementById('prod-filter-recent').hidden = !prodSelectedMonth && prodViewMode === 'recent';
@@ -1195,6 +1311,8 @@ document.getElementById('lineage-filter-all').addEventListener('click', () => se
 document.getElementById('lineage-clear-btn').addEventListener('click', lineageClearSearch);
 document.getElementById('lineage-month-filter-clear').addEventListener('click', clearLineageMonth);
 document.getElementById('finance-month-filter-clear').addEventListener('click', clearFinanceMonth);
+document.getElementById('finance-debtors-filter-all').addEventListener('click', () => setFinanceDebtorsViewMode('all'));
+document.getElementById('finance-debtors-filter-recent').addEventListener('click', () => setFinanceDebtorsViewMode('recent'));
 document.getElementById('finance-bills-filter-all').addEventListener('click', () => setFinanceViewMode('all'));
 document.getElementById('finance-bills-filter-recent').addEventListener('click', () => setFinanceViewMode('recent'));
 document.getElementById('purchase-filter-all').addEventListener('click', () => setPurchaseViewMode('all'));
