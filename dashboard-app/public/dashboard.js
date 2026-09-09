@@ -1213,27 +1213,174 @@ async function loadProduction() {
   tableSummary('prod-ready-summary', readyWorkOrders, null, 'work order', null);
 }
 
+// One "not yet converted to the next stage" table per pipeline handoff —
+// see the pending.* queries in queries.js for exactly which join/status
+// backs each list and why. Receivables has no table here (only a link into
+// Finance) since it can only be tracked at customer level in this data.
+// This dashboard is strictly read-only against SYNCAXIS (a read-only DB
+// login is used deliberately) — no editable fields here or anywhere else in
+// the app; all data entry/updates happen in SourcePro ERP itself.
+async function loadActionItems() {
+  const [enquiries, quotations, workOrders, invoicing, purchaseOrders, receivablesSummary] = await Promise.all([
+    fetchJSON('/api/pending/enquiries'),
+    fetchJSON('/api/pending/quotations'),
+    fetchJSON('/api/pending/work-orders'),
+    fetchJSON('/api/pending/invoicing'),
+    fetchJSON('/api/pending/purchase-orders'),
+    fetchJSON('/api/pending/receivables-summary')
+  ]);
+  const rs = receivablesSummary[0] || {};
+
+  document.getElementById('act-enquiries-count').textContent = fmtNum(enquiries.length);
+  document.getElementById('act-quotations-count').textContent = fmtNum(quotations.length);
+  document.getElementById('act-workorders-count').textContent = fmtNum(workOrders.length);
+  document.getElementById('act-invoicing-count').textContent = fmtNum(invoicing.length);
+  document.getElementById('act-po-count').textContent = fmtNum(purchaseOrders.length);
+  document.getElementById('act-receivables-count').textContent = fmtNum(rs.customerCount);
+
+  fillTable('table-act-enquiries', enquiries,
+    r => `<tr><td>${r.enquiryNo ?? ''}</td>${dateTd(r.enquiryDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td></tr>`, 4);
+  tableSummary('act-enquiries-summary', enquiries, null, 'enquiry', null);
+
+  fillTable('table-act-quotations', quotations,
+    r => `<tr><td>${r.quotationNo ?? ''}</td>${dateTd(r.quotationDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.quotationValue)}</tr>`, 5);
+  tableSummary('act-quotations-summary', quotations, 'quotationValue', 'quotation', 'Total value');
+
+  fillTable('table-act-workorders', workOrders,
+    r => `<tr><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.soValue)}</tr>`, 5);
+  tableSummary('act-workorders-summary', workOrders, 'soValue', 'sales order', 'Total value');
+
+  fillTable('table-act-invoicing', invoicing,
+    r => `<tr><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.soValue)}${moneyTd(r.invoicedValue)}${moneyTd(r.pendingValue)}</tr>`, 6);
+  tableSummary('act-invoicing-summary', invoicing, 'pendingValue', 'sales order', 'Total pending');
+
+  fillTable('table-act-po', purchaseOrders,
+    r => `<tr><td>${r.poNo ?? ''}</td>${dateTd(r.poDate)}${numTd(r.daysPending)}<td>${(r.vendorName || '').trim()}</td>${moneyTd(r.poValue)}${moneyTd(r.receivedValue)}<td>${r.statusLabel ?? ''}</td></tr>`, 7);
+  tableSummary('act-po-summary', purchaseOrders, 'poValue', 'purchase order', 'Total value');
+}
+
+let salesPerfSelectedFY = currentFYStartYear();
+let salesPerfFYInitialized = false;
+let salesPerfSelectedMonth = null; // 'YYYY-MM', or null = whole selected FY
+
+function initSalesPerfFYSelect() {
+  if (salesPerfFYInitialized) return;
+  salesPerfFYInitialized = true;
+  const select = document.getElementById('salesperf-fy-select');
+  const current = currentFYStartYear();
+  for (let y = current; y >= current - 3; y--) {
+    const opt = document.createElement('option');
+    opt.value = y;
+    opt.textContent = fyLabel(y);
+    select.appendChild(opt);
+  }
+  select.value = salesPerfSelectedFY;
+  select.addEventListener('change', () => {
+    salesPerfSelectedFY = Number(select.value);
+    refreshCurrent();
+  });
+}
+
+function selectSalesPerfMonth(period) {
+  salesPerfSelectedMonth = period;
+  refreshCurrent();
+}
+
+function clearSalesPerfMonth() {
+  salesPerfSelectedMonth = null;
+  refreshCurrent();
+}
+
+// From management's "Sales Department – KPI & Monthly Performance
+// Scorecard" — not sourced from SourcePro (no such field exists there), so
+// these are maintained here by hand.
+const SALES_KPI_TARGETS = {
+  orderBookingPerMonth: 10000000,        // Per-salesperson: "Min ₹1 Cr./Month"
+  companyOrderBookingPerMonth: 50000000, // Company-wide: "≥ ₹5 Cr." (roughly 5 reps x ₹1 Cr each)
+  newCustomersPerMonth: 5,               // Company-wide: "Minimum 5 new customers added/month"
+  pipelineTargetPerSalesperson: 30000000, // "≥3x monthly booking target" = 3 x ₹1 Cr per rep
+  conversionMinPct: 25,                  // "≥25–30%" — shown as a range, not a single cutoff
+  conversionMaxPct: 30
+};
+
+// Reports the KPIs from that scorecard that SYNCAXIS actually has data for —
+// see the salesPerformance.* comments in queries.js for exactly which ones
+// were left out and why (customer visits, follow-up-closure %, and
+// collection-vs-due all have no usable source table). Ratings and increment
+// eligibility are deliberately not calculated — actual numbers only.
+async function loadSalesPerformance() {
+  initSalesPerfFYSelect();
+  const fyQuery = `?fy=${salesPerfSelectedFY}`;
+  const scorecardQuery = salesPerfSelectedMonth ? `?month=${encodeURIComponent(salesPerfSelectedMonth)}` : fyQuery;
+  const [monthly, scorecard, pipeline] = await Promise.all([
+    fetchJSON('/api/sales-performance/monthly-breakdown' + fyQuery),
+    fetchJSON('/api/sales-performance/scorecard' + scorecardQuery),
+    fetchJSON('/api/sales-performance/pipeline')
+  ]);
+
+  const fyText = fyLabel(salesPerfSelectedFY);
+  document.getElementById('salesperf-breakdown-title').innerHTML =
+    `Monthly totals — all salespeople — ${fyText} <span class="muted">(click a month row to filter the scorecard below)</span>`;
+  fillTable('table-salesperf-monthly-breakdown', monthly,
+    r => {
+      const bookingPct = (Number(r.orderValue) || 0) / SALES_KPI_TARGETS.companyOrderBookingPerMonth * 100;
+      return `<tr class="${r.period === salesPerfSelectedMonth ? 'selected' : ''}" onclick="selectSalesPerfMonth('${r.period}')"><td>${r.period}</td>${numTd(r.enquiryCount)}${numTd(r.quotationCount)}${moneyTd(r.quotationValue)}${numTd(r.orderCount)}${moneyTd(r.orderValue)}${td(`${fmtNum(bookingPct)}%`, bookingPct, 'num')}${moneyTd(r.billingValue)}${numTd(r.newCustomerCount)}</tr>`;
+    }, 9);
+  const fyOrderTotal = monthly.reduce((sum, r) => sum + (Number(r.orderValue) || 0), 0);
+  const fyBillingTotal = monthly.reduce((sum, r) => sum + (Number(r.billingValue) || 0), 0);
+  document.getElementById('salesperf-breakdown-summary').innerHTML =
+    `FY total &middot; Orders booked: <strong>${fmtMoney(fyOrderTotal)}</strong> &middot; Billing: <strong>${fmtMoney(fyBillingTotal)}</strong>`;
+
+  const filterBar = document.getElementById('salesperf-month-filter-bar');
+  filterBar.hidden = !salesPerfSelectedMonth;
+  const monthLabel = salesPerfSelectedMonth ? crmMonthLabel(salesPerfSelectedMonth) : '';
+  document.getElementById('salesperf-month-filter-label').textContent = monthLabel;
+  document.getElementById('salesperf-scorecard-title').textContent = salesPerfSelectedMonth
+    ? `Scorecard by salesperson — ${monthLabel}` : `Scorecard by salesperson — ${fyText}`;
+
+  fillTable('table-salesperf-scorecard', scorecard,
+    r => {
+      const target = SALES_KPI_TARGETS.orderBookingPerMonth;
+      const pct = (Number(r.orderValue) || 0) / target * 100;
+      const conv = r.quotationCount > 0 ? (Number(r.orderCount) || 0) / Number(r.quotationCount) * 100 : null;
+      const convDisplay = conv == null ? '—' : `${fmtNum(conv)}%`;
+      return `<tr><td>${r.salesperson ?? ''}</td>${numTd(r.enquiryCount)}${numTd(r.quotationCount)}${moneyTd(r.quotationValue)}${numTd(r.orderCount)}${moneyTd(r.orderValue)}${td(`${fmtNum(pct)}%`, pct, 'num')}${td(convDisplay, conv ?? -Infinity, 'num')}${moneyTd(r.billingValue)}${numTd(r.newCustomerCount)}</tr>`;
+    }, 10);
+  tableSummary('salesperf-scorecard-summary', scorecard, 'orderValue', 'salesperson', 'Total booked');
+
+  fillTable('table-salesperf-pipeline', pipeline,
+    r => {
+      const pipelinePct = (Number(r.pipelineValue) || 0) / SALES_KPI_TARGETS.pipelineTargetPerSalesperson * 100;
+      return `<tr><td>${r.salesperson ?? ''}</td>${numTd(r.openQuotationCount)}${moneyTd(r.pipelineValue)}${td(`${fmtNum(pipelinePct)}%`, pipelinePct, 'num')}</tr>`;
+    }, 4);
+  tableSummary('salesperf-pipeline-summary', pipeline, 'pipelineValue', 'salesperson', 'Total open pipeline');
+}
+
 const loaders = {
   crm: loadCRM,
   lineage: loadLineage,
   sales: loadSales,
+  salesperf: loadSalesPerformance,
   purchase: loadPurchase,
   inventory: loadInventory,
   finance: loadFinance,
-  production: loadProduction
+  production: loadProduction,
+  actions: loadActionItems
 };
 
 const titles = {
   crm: 'CRM Pipeline — Enquiry to Order',
   lineage: 'Order Lineage — Enquiry to Despatch',
   sales: 'Sales & Revenue',
+  salesperf: 'Sales Performance Scorecard',
   purchase: 'Purchase & Vendors',
   inventory: 'Inventory & Stock',
   finance: 'Finance (AR / AP)',
-  production: 'Production & Work Orders'
+  production: 'Production & Work Orders',
+  actions: 'Action Items — Where the Pipeline is Stuck'
 };
 
-let currentModule = 'crm';
+let currentModule = 'actions';
 
 async function activateModule(mod) {
   currentModule = mod;
@@ -1311,6 +1458,8 @@ document.getElementById('lineage-filter-all').addEventListener('click', () => se
 document.getElementById('lineage-clear-btn').addEventListener('click', lineageClearSearch);
 document.getElementById('lineage-month-filter-clear').addEventListener('click', clearLineageMonth);
 document.getElementById('finance-month-filter-clear').addEventListener('click', clearFinanceMonth);
+document.getElementById('salesperf-month-filter-clear').addEventListener('click', clearSalesPerfMonth);
+document.getElementById('act-view-debtors-btn').addEventListener('click', () => activateModule('finance'));
 document.getElementById('finance-debtors-filter-all').addEventListener('click', () => setFinanceDebtorsViewMode('all'));
 document.getElementById('finance-debtors-filter-recent').addEventListener('click', () => setFinanceDebtorsViewMode('recent'));
 document.getElementById('finance-bills-filter-all').addEventListener('click', () => setFinanceViewMode('all'));
@@ -1339,7 +1488,8 @@ const NO_PAGINATION_TABLES = new Set([
   'table-purchase-monthly-breakdown',
   'table-inv-monthly-breakdown',
   'table-finance-monthly-breakdown',
-  'table-prod-monthly-breakdown'
+  'table-prod-monthly-breakdown',
+  'table-salesperf-monthly-breakdown'
 ]);
 
 document.querySelectorAll('.data-table').forEach(t => {
@@ -1349,4 +1499,4 @@ document.querySelectorAll('.data-table').forEach(t => {
 
 checkHealth();
 loadSessionInfo();
-activateModule('crm');
+activateModule('actions');

@@ -26,9 +26,11 @@
       <span id="dbStatusText"></span>
     </div>
     <div class="nav-group">
-      <button class="nav-item active" data-module="crm">CRM Pipeline</button>
+      <button class="nav-item active" data-module="actions">Action Items</button>
+      <button class="nav-item" data-module="crm">CRM Pipeline</button>
       <button class="nav-item" data-module="lineage">Order Lineage</button>
       <button class="nav-item" data-module="sales">Sales &amp; Revenue</button>
+      <button class="nav-item" data-module="salesperf">Sales Performance</button>
       <button class="nav-item" data-module="purchase">Purchase &amp; Vendors</button>
       <button class="nav-item" data-module="inventory">Inventory &amp; Stock</button>
       <button class="nav-item" data-module="finance">Finance (AR / AP)</button>
@@ -47,7 +49,7 @@
     </header>
 
     <!-- ===================== CRM ===================== -->
-    <section class="panel active" id="panel-crm">
+    <section class="panel" id="panel-crm">
       <div class="stat-row">
         <div class="stat">
           <div class="stat-label" id="crm-enquiries-label">Enquiries</div>
@@ -245,6 +247,55 @@
           <div class="table-summary" id="sales-invoices-summary"></div>
           <table class="data-table" id="table-sales-invoices">
             <thead><tr><th>Invoice No.</th><th>Customer</th><th>Date</th><th>Value</th><th>Status</th><th>SO No.</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-salesperf">
+      <div class="grid-1">
+        <div class="card">
+          <p class="muted" style="margin: 0; font-size: 12.5px;">Built from management's Sales KPI &amp; Monthly Performance Scorecard &mdash; only the KPIs SourcePro actually has data for are shown here. Customer visits, follow-up-closure %, and collection-vs-due can't be computed: there's no visit log, the follow-up log is barely used (~13 rows total in this database), and there's no payment/receipt log &mdash; only a current-outstanding snapshot (see Finance AR/AP). Targets shown are hardcoded from the scorecard you provided, not sourced from SourcePro; ratings and increment eligibility are intentionally not calculated here.</p>
+        </div>
+      </div>
+      <div class="crm-fy-bar">
+        <label for="salesperf-fy-select">Financial year</label>
+        <select id="salesperf-fy-select"></select>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="salesperf-breakdown-title">Monthly totals — all salespeople <span class="muted">(click a month row to filter the scorecard below)</span></h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Company-wide Order Booking target: &#8377;5 Cr./month. New Customer target: 5/month.</p>
+          <div class="table-summary" id="salesperf-breakdown-summary"></div>
+          <table class="data-table" id="table-salesperf-monthly-breakdown">
+            <thead><tr><th>Month</th><th>Enquiries</th><th>Quotations</th><th>Quotation Value</th><th>Orders Booked</th><th>Order Value</th><th>vs &#8377;5Cr Target</th><th>Billing Value</th><th>New Customers</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="crm-filter-bar" id="salesperf-month-filter-bar" hidden>
+        Showing: <strong id="salesperf-month-filter-label"></strong>
+        <button id="salesperf-month-filter-clear" class="btn-link">Show whole financial year instead</button>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3 id="salesperf-scorecard-title">Scorecard by salesperson</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Order Booking target: &#8377;1 Cr./month/salesperson. Quotation Conversion target: 25&ndash;30%. No target set for Billing/Turnover in the scorecard provided. New Customer target (5/month) is company-wide, shown in the monthly totals table above, not per salesperson.</p>
+          <div class="table-summary" id="salesperf-scorecard-summary"></div>
+          <table class="data-table" id="table-salesperf-scorecard">
+            <thead><tr><th>Salesperson</th><th>Enquiries</th><th>Quotations</th><th>Quotation Value</th><th>Orders Booked</th><th>Order Value</th><th>vs Target</th><th>Conversion Ratio</th><th>Billing</th><th>New Customers</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1">
+        <div class="card">
+          <h3>Open pipeline by salesperson <span class="muted">(current, not scoped to the month/FY above)</span></h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Quotations sent but not yet won (converted to a Sales Order) or lost. Target: &#8377;3 Cr./salesperson (3&times; the &#8377;1 Cr individual booking target).</p>
+          <div class="table-summary" id="salesperf-pipeline-summary"></div>
+          <table class="data-table" id="table-salesperf-pipeline">
+            <thead><tr><th>Salesperson</th><th>Open Quotations</th><th>Pipeline Value</th><th>vs Target</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -590,6 +641,105 @@
             <thead><tr><th>WO No.</th><th>Item</th><th>Ordered Qty</th><th>Received Qty</th><th>Ready Date</th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel active" id="panel-actions">
+      <div class="stat-row">
+        <div class="stat stat-hero">
+          <div class="stat-label">Enquiries pending Quotation</div>
+          <div class="stat-value" id="act-enquiries-count">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Quotations pending Sales Order</div>
+          <div class="stat-value" id="act-quotations-count">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Sales Orders pending Work Order</div>
+          <div class="stat-value" id="act-workorders-count">—</div>
+        </div>
+      </div>
+      <div class="stat-row">
+        <div class="stat stat-alert">
+          <div class="stat-label">Sales Orders pending Invoice</div>
+          <div class="stat-value" id="act-invoicing-count">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Purchase Orders pending GRN/Close</div>
+          <div class="stat-value" id="act-po-count">—</div>
+        </div>
+        <div class="stat stat-alert">
+          <div class="stat-label">Customers with outstanding receivable</div>
+          <div class="stat-value" id="act-receivables-count">—</div>
+        </div>
+      </div>
+
+      <div class="grid-1">
+        <div class="card">
+          <h3>Enquiries &mdash; pending Quotation</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Open enquiries with no quotation raised yet.</p>
+          <div class="table-summary" id="act-enquiries-summary"></div>
+          <table class="data-table" id="table-act-enquiries">
+            <thead><tr><th>Enquiry No.</th><th>Date</th><th>Days Pending</th><th>Customer</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-1">
+        <div class="card">
+          <h3>Quotations &mdash; pending Sales Order</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Open quotations with no customer PO / Sales Order yet.</p>
+          <div class="table-summary" id="act-quotations-summary"></div>
+          <table class="data-table" id="table-act-quotations">
+            <thead><tr><th>Quotation No.</th><th>Date</th><th>Days Pending</th><th>Customer</th><th>Value</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-1">
+        <div class="card">
+          <h3>Sales Orders &mdash; pending Work Order</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Confirmed sales orders with no Work Order / Shop Job Order created yet.</p>
+          <div class="table-summary" id="act-workorders-summary"></div>
+          <table class="data-table" id="table-act-workorders">
+            <thead><tr><th>SO No.</th><th>Date</th><th>Days Pending</th><th>Customer</th><th>Value</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-1">
+        <div class="card">
+          <h3>Sales Orders &mdash; pending Invoice</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Sorted by the amount still un-invoiced, largest first &mdash; not by date, since most live orders are at least partially invoiced.</p>
+          <div class="table-summary" id="act-invoicing-summary"></div>
+          <table class="data-table" id="table-act-invoicing">
+            <thead><tr><th>SO No.</th><th>Date</th><th>Customer</th><th>SO Value</th><th>Invoiced</th><th>Pending</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-1">
+        <div class="card">
+          <h3>Purchase Orders &mdash; pending GRN / Close</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Open or New purchase orders &mdash; materials not fully received, GRN not done.</p>
+          <div class="table-summary" id="act-po-summary"></div>
+          <table class="data-table" id="table-act-po">
+            <thead><tr><th>PO No.</th><th>Date</th><th>Days Pending</th><th>Vendor</th><th>PO Value</th><th>Received</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid-1">
+        <div class="card">
+          <h3>Receivables &mdash; money not received or partially received</h3>
+          <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Only trackable at customer level in this data &mdash; there's no reliable link from an outstanding balance to a specific invoice. See the full list in Finance (AR / AP).</p>
+          <button class="btn-link" id="act-view-debtors-btn">View Debtors in Finance (AR / AP) &rarr;</button>
         </div>
       </div>
     </section>

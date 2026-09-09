@@ -331,6 +331,26 @@ app.get('/api/production/ready-work-orders', (req, res) => {
   runQuery(res, queries.production.readyWorkOrders(filtered), params);
 });
 
+// ---------- Action Items (pipeline handoffs not yet converted) ----------
+app.get('/api/pending/enquiries', (req, res) => runQuery(res, queries.pending.enquiries));
+app.get('/api/pending/quotations', (req, res) => runQuery(res, queries.pending.quotations));
+app.get('/api/pending/work-orders', (req, res) => runQuery(res, queries.pending.workOrders));
+app.get('/api/pending/invoicing', (req, res) => runQuery(res, queries.pending.invoicing));
+app.get('/api/pending/purchase-orders', (req, res) => runQuery(res, queries.pending.purchaseOrders));
+app.get('/api/pending/receivables-summary', (req, res) => runQuery(res, queries.pending.receivablesSummary));
+
+// ---------- Sales Performance Scorecard ----------
+app.get('/api/sales-performance/monthly-breakdown', (req, res) => {
+  const fy = parseFYRange(req.query.fy);
+  runQuery(res, queries.salesPerformance.monthlyBreakdown, { start: fy.start, end: fy.end });
+});
+app.get('/api/sales-performance/scorecard', (req, res) => {
+  const monthRange = parseMonthRange(req.query.month);
+  const range = monthRange || parseFYRange(req.query.fy);
+  runQuery(res, queries.salesPerformance.scorecard(true), { start: range.start, end: range.end });
+});
+app.get('/api/sales-performance/pipeline', (req, res) => runQuery(res, queries.salesPerformance.pipeline));
+
 // Health check — quick way to confirm the DB connection works at all
 app.get('/api/health', async (req, res) => {
   try {

@@ -1191,6 +1191,279 @@ const queries = {
       ${filtered ? 'AND w.XWOCLOSDT >= @start AND w.XWOCLOSDT < @end' : ''}
       ORDER BY w.XWOCLOSDT DESC;
     `
+  },
+
+  // ---------------- ACTION ITEMS: where the pipeline is stuck ----------------
+  // One "not yet converted to the next stage" list per handoff point:
+  //   Enquiry -> Quotation -> Sales Order -> Work Order/SJO -> Invoice -> Paid
+  //   Purchase Order -> GRN/Closed
+  // Every join here reuses a chain already verified elsewhere in this file
+  // (see crm.recentOrders/recentInvoices and lineage.production) — nothing
+  // new or unverified. "Dead" statuses (Dropped enquiries, Deleted/Cancelled
+  // orders and POs) are excluded throughout: they're closed out, not stuck.
+  pending: {
+    // Open enquiries (XININQSTAT='O') with no linked quotation at all.
+    // XININQSTAT='D' (Dropped, 5 rows in this data) is excluded — already
+    // dead, not a pending action. Verified via XQDINQID (enquiry->quotation
+    // link): 'Q' status enquiries have a quotation 146/146 of the time.
+    enquiries: `
+      SELECT
+        CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) AS enquiryNo,
+        i.XININQDT AS enquiryDate,
+        DATEDIFF(DAY, i.XININQDT, GETDATE()) AS daysPending,
+        ISNULL(c.MCMCUSTNM, i.XINCUSTCD) AS customerName
+      FROM XINQDTL i
+      LEFT JOIN MCUSTMST c ON i.XINCUSTCD = c.MCMCUSTCD
+      WHERE i.XININQSTAT = 'O'
+        AND NOT EXISTS (SELECT 1 FROM XQTNDTL q WHERE q.XQDINQID = i.XINAUTOID)
+      ORDER BY i.XININQDT ASC;
+    `,
+    // Open quotations (XQDQNSTAT='O') with no linked sales order — i.e. no
+    // customer PO received/converted yet. Verified via XOBQTNID.
+    quotations: `
+      SELECT
+        CONCAT(q.XQDQTNYEAR, '/', q.XQDQTNGRP, '/', q.XQDQTNNO) AS quotationNo,
+        q.XQDQTNDT AS quotationDate,
+        DATEDIFF(DAY, q.XQDQTNDT, GETDATE()) AS daysPending,
+        ISNULL(c.MCMCUSTNM, q.XQDCUSTCD) AS customerName,
+        q.XQDTOTDMCY AS quotationValue
+      FROM XQTNDTL q
+      LEFT JOIN MCUSTMST c ON q.XQDCUSTCD = c.MCMCUSTCD
+      WHERE q.XQDQNSTAT = 'O'
+        AND NOT EXISTS (SELECT 1 FROM XORDDTL o WHERE o.XOBQTNID = q.XQDAUTOID)
+      ORDER BY q.XQDQTNDT ASC;
+    `,
+    // Live sales orders (excludes XOBORDSTAT='D', 2 rows) with no Work Order/
+    // Shop Job Order created yet — same Order->OAF->XSJOHDR chain verified in
+    // lineage.production.
+    workOrders: `
+      SELECT
+        CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS soNo,
+        o.XOBORDDT AS soDate,
+        DATEDIFF(DAY, o.XOBORDDT, GETDATE()) AS daysPending,
+        ISNULL(c.MCMCUSTNM, o.XOBCUSTCD) AS customerName,
+        o.XOBTOTDMCY AS soValue
+      FROM XORDDTL o
+      LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
+      WHERE o.XOBORDSTAT <> 'D'
+        AND NOT EXISTS (
+          SELECT 1 FROM XOAFHDR oaf JOIN XSJOHDR s ON s.XSHOAFID = oaf.XOAFHAUTOID
+          WHERE oaf.XOAFHORDID = o.XOBAUTOID
+        )
+      ORDER BY o.XOBORDDT ASC;
+    `,
+    // Live sales orders not yet fully invoiced (invoiced amount < order
+    // value), sorted by the size of the pending amount — not by date — since
+    // ~85% of live orders are at least partially invoiced in this data
+    // (multi-shipment invoicing is normal here), so date order would bury the
+    // orders with the most money still un-invoiced under a wall of near-done
+    // ones. Same OAF->Invoice chain as crm.recentOrders.
+    invoicing: `
+      SELECT
+        CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS soNo,
+        o.XOBORDDT AS soDate,
+        ISNULL(c.MCMCUSTNM, o.XOBCUSTCD) AS customerName,
+        o.XOBTOTDMCY AS soValue,
+        ISNULL(inv.invoicedAmount, 0) AS invoicedValue,
+        o.XOBTOTDMCY - ISNULL(inv.invoicedAmount, 0) AS pendingValue
+      FROM XORDDTL o
+      LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
+      OUTER APPLY (
+        SELECT SUM(XDIHAMT) AS invoicedAmount
+        FROM (
+          SELECT DISTINCT ih.XDIHAUTOID, ih.XDIHAMT
+          FROM XOAFHDR oaf
+          JOIN XDCINVDTL id ON id.XDIDOAFID = oaf.XOAFHAUTOID
+          JOIN XDCINVHDR ih ON id.XDIDREFID = ih.XDIHAUTOID
+          WHERE oaf.XOAFHORDID = o.XOBAUTOID
+        ) d
+      ) inv
+      WHERE o.XOBORDSTAT <> 'D'
+        AND ISNULL(inv.invoicedAmount, 0) < o.XOBTOTDMCY
+      ORDER BY pendingValue DESC;
+    `,
+    // Purchase Orders not yet closed (POHSTATUS 'O'=Open or 'N'=New) —
+    // excludes 'D' (Cancelled, 8 rows). POHSTATUS='C' correlates 100% with a
+    // populated close date and a linked GRN (verified in purchase.orders),
+    // so 'O'/'N' reliably means "GRN not done / materials not fully received".
+    purchaseOrders: `
+      SELECT
+        CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo,
+        p.POHORDDT AS poDate,
+        DATEDIFF(DAY, p.POHORDDT, GETDATE()) AS daysPending,
+        ISNULL(v.MVmName, p.POHVNDCODE) AS vendorName,
+        p.POHNETVAL AS poValue,
+        p.POHRCPVAL AS receivedValue,
+        CASE p.POHSTATUS WHEN 'O' THEN 'Open' WHEN 'N' THEN 'New' ELSE p.POHSTATUS END AS statusLabel
+      FROM XPOHEAD p
+      LEFT JOIN MVNDMAST v ON p.POHVNDCODE = v.MVmVndCode
+      WHERE p.POHSTATUS IN ('O', 'N')
+      ORDER BY p.POHORDDT ASC;
+    `,
+    // Receivables can only be tracked at customer level, not per-invoice —
+    // XOUTSTNDHDR has no reliable link to a specific invoice (see the
+    // customerAR note in lineage above, and finance.debtors). This mirrors
+    // finance.debtors' own grouping/HAVING exactly so the count matches what
+    // the Finance panel shows.
+    receivablesSummary: `
+      SELECT COUNT(*) AS customerCount, ISNULL(SUM(bal), 0) AS totalOutstanding
+      FROM (
+        SELECT XOH_ACCCD, SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM) AS bal
+        FROM XOUTSTNDHDR
+        WHERE XOH_DR_CR = 'D'
+        GROUP BY XOH_ACCCD
+        HAVING ABS(SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM)) > 0.01
+      ) x;
+    `
+  },
+
+  // ---------------- SALES PERFORMANCE SCORECARD ----------------
+  // Built against management's "Sales Department – KPI & Monthly Performance
+  // Scorecard". Only the KPIs SYNCAXIS actually has source data for are
+  // here — "Customer Visits" and "Follow-up Closure" have no home in this
+  // schema (no visit log at all; XFOLLOWUPDTL exists but has ~13 rows total
+  // in this database, too sparse to be a real metric) and "Collection
+  // achieved vs due" can't be computed either — XOUTSTNDHDR is a snapshot of
+  // what's currently outstanding, not a payment/receipt log, and no such log
+  // exists anywhere in this database (checked). Ratings/increment-eligibility
+  // are deliberately NOT computed here — this reports actual numbers only.
+  salesPerformance: {
+    // All salespeople combined, FY-bound, same always-12-rows shape as
+    // crm.monthlyBreakdown — feeds "click a month to filter the scorecard
+    // below", the same pattern used throughout this app. newCustomerCount is
+    // company-wide (not per salesperson) — each customer's very first
+    // enquiry ever, falling in that month; see the scorecard note below for
+    // why this proxy is used instead of an MCUSTMST creation date.
+    monthlyBreakdown: `
+      WITH Months AS (
+        SELECT TOP 12 FORMAT(DATEADD(MONTH, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @start), 'yyyy-MM') AS period
+        FROM sys.all_objects
+      ),
+      Enq AS (
+        SELECT FORMAT(XININQDT, 'yyyy-MM') AS period, COUNT(*) AS c
+        FROM XINQDTL WHERE XININQDT >= @start AND XININQDT < @end
+        GROUP BY FORMAT(XININQDT, 'yyyy-MM')
+      ),
+      Qtn AS (
+        SELECT FORMAT(XQDQTNDT, 'yyyy-MM') AS period, COUNT(*) AS c, SUM(XQDTOTDMCY) AS val
+        FROM XQTNDTL WHERE XQDQTNDT >= @start AND XQDQTNDT < @end
+        GROUP BY FORMAT(XQDQTNDT, 'yyyy-MM')
+      ),
+      Ord AS (
+        SELECT FORMAT(XOBORDDT, 'yyyy-MM') AS period, COUNT(*) AS c, SUM(XOBTOTDMCY) AS val
+        FROM XORDDTL WHERE XOBORDDT >= @start AND XOBORDDT < @end
+        GROUP BY FORMAT(XOBORDDT, 'yyyy-MM')
+      ),
+      Inv AS (
+        SELECT FORMAT(XDIHINVDT, 'yyyy-MM') AS period, SUM(XDIHAMT) AS val
+        FROM XDCINVHDR WHERE XDIHINVDT >= @start AND XDIHINVDT < @end
+        GROUP BY FORMAT(XDIHINVDT, 'yyyy-MM')
+      ),
+      CompanyFirstEnquiry AS (
+        SELECT XINCUSTCD, XININQDT,
+          ROW_NUMBER() OVER (PARTITION BY XINCUSTCD ORDER BY XININQDT ASC) AS rn
+        FROM XINQDTL
+      ),
+      NewCust AS (
+        SELECT FORMAT(XININQDT, 'yyyy-MM') AS period, COUNT(*) AS c
+        FROM CompanyFirstEnquiry
+        WHERE rn = 1 AND XININQDT >= @start AND XININQDT < @end
+        GROUP BY FORMAT(XININQDT, 'yyyy-MM')
+      )
+      SELECT
+        m.period,
+        ISNULL(e.c, 0) AS enquiryCount,
+        ISNULL(q.c, 0) AS quotationCount,
+        ISNULL(q.val, 0) AS quotationValue,
+        ISNULL(o.c, 0) AS orderCount,
+        ISNULL(o.val, 0) AS orderValue,
+        ISNULL(i.val, 0) AS billingValue,
+        ISNULL(nc.c, 0) AS newCustomerCount
+      FROM Months m
+      LEFT JOIN Enq e ON m.period = e.period
+      LEFT JOIN Qtn q ON m.period = q.period
+      LEFT JOIN Ord o ON m.period = o.period
+      LEFT JOIN Inv i ON m.period = i.period
+      LEFT JOIN NewCust nc ON m.period = nc.period
+      ORDER BY m.period;
+    `,
+    // Per-salesperson breakdown for a period (a clicked month, or the whole
+    // FY when unfiltered). Billing is attributed via Invoice->OAF->Order
+    // (the same chain verified in crm.recentOrders/recentInvoices), NOT
+    // XDCINVHDR's own salesperson field — that's blank on every row in this
+    // data (see the recentInvoices note). "New customers" = each customer's
+    // very first enquiry ever, attributed to whoever handled it, falling in
+    // this period — a proxy; MCUSTMST's own creation date (if it has one and
+    // is more authoritative) hasn't been checked against this yet.
+    scorecard: (filtered) => `
+      WITH FirstEnquiry AS (
+        SELECT XINCUSTCD, XININQDT, XINSPCODE,
+          ROW_NUMBER() OVER (PARTITION BY XINCUSTCD ORDER BY XININQDT ASC) AS rn
+        FROM XINQDTL
+      )
+      SELECT
+        e.MEMEMPNAME AS salesperson,
+        ISNULL(enq.c, 0) AS enquiryCount,
+        ISNULL(qtn.c, 0) AS quotationCount,
+        ISNULL(qtn.val, 0) AS quotationValue,
+        ISNULL(ord.c, 0) AS orderCount,
+        ISNULL(ord.val, 0) AS orderValue,
+        ISNULL(inv.val, 0) AS billingValue,
+        ISNULL(newcust.c, 0) AS newCustomerCount
+      FROM MEMPMST e
+      LEFT JOIN (
+        SELECT XINSPCODE AS spCode, COUNT(*) AS c
+        FROM XINQDTL
+        ${filtered ? 'WHERE XININQDT >= @start AND XININQDT < @end' : ''}
+        GROUP BY XINSPCODE
+      ) enq ON enq.spCode = e.MEMEMPCODE
+      LEFT JOIN (
+        SELECT XQNSPCODE AS spCode, COUNT(*) AS c, SUM(XQDTOTDMCY) AS val
+        FROM XQTNDTL
+        ${filtered ? 'WHERE XQDQTNDT >= @start AND XQDQTNDT < @end' : ''}
+        GROUP BY XQNSPCODE
+      ) qtn ON qtn.spCode = e.MEMEMPCODE
+      LEFT JOIN (
+        SELECT XOBSPCODE AS spCode, COUNT(*) AS c, SUM(XOBTOTDMCY) AS val
+        FROM XORDDTL
+        ${filtered ? 'WHERE XOBORDDT >= @start AND XOBORDDT < @end' : ''}
+        GROUP BY XOBSPCODE
+      ) ord ON ord.spCode = e.MEMEMPCODE
+      LEFT JOIN (
+        SELECT o.XOBSPCODE AS spCode, SUM(ih.XDIHAMT) AS val
+        FROM XDCINVHDR ih
+        JOIN XDCINVDTL id ON id.XDIDREFID = ih.XDIHAUTOID
+        JOIN XOAFHDR oaf ON id.XDIDOAFID = oaf.XOAFHAUTOID
+        JOIN XORDDTL o ON oaf.XOAFHORDID = o.XOBAUTOID
+        ${filtered ? 'WHERE ih.XDIHINVDT >= @start AND ih.XDIHINVDT < @end' : ''}
+        GROUP BY o.XOBSPCODE
+      ) inv ON inv.spCode = e.MEMEMPCODE
+      LEFT JOIN (
+        SELECT XINSPCODE AS spCode, COUNT(*) AS c
+        FROM FirstEnquiry
+        WHERE rn = 1
+        ${filtered ? 'AND XININQDT >= @start AND XININQDT < @end' : ''}
+        GROUP BY XINSPCODE
+      ) newcust ON newcust.spCode = e.MEMEMPCODE
+      WHERE ISNULL(enq.c, 0) + ISNULL(qtn.c, 0) + ISNULL(ord.c, 0) + ISNULL(inv.val, 0) > 0
+      ORDER BY ISNULL(ord.val, 0) DESC;
+    `,
+    // Current open pipeline (quotations sent but not yet won or lost) per
+    // salesperson — a snapshot, not scoped to a month, same idea as
+    // finance.debtors' "current outstanding" default. Reuses the exact
+    // "no matching order" check already verified in pending.quotations.
+    pipeline: `
+      SELECT
+        ISNULL(e.MEMEMPNAME, 'Unassigned') AS salesperson,
+        SUM(q.XQDTOTDMCY) AS pipelineValue,
+        COUNT(*) AS openQuotationCount
+      FROM XQTNDTL q
+      LEFT JOIN MEMPMST e ON q.XQNSPCODE = e.MEMEMPCODE
+      WHERE q.XQDQNSTAT = 'O'
+        AND NOT EXISTS (SELECT 1 FROM XORDDTL o WHERE o.XOBQTNID = q.XQDAUTOID)
+      GROUP BY e.MEMEMPNAME
+      ORDER BY pipelineValue DESC;
+    `
   }
 };
 
