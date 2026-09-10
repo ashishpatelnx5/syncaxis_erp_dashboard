@@ -192,6 +192,11 @@ app.get('/api/lineage/orders', (req, res) => {
     ...(dateRange && { start: dateRange.start, end: dateRange.end })
   });
 });
+app.get('/api/lineage/global-search', (req, res) => {
+  const search = (req.query.q || '').trim();
+  if (!search) return res.json([]);
+  runQuery(res, queries.lineage.globalSearch, { search });
+});
 app.get('/api/lineage/monthly-breakdown', (req, res) => {
   const fy = parseFYRange(req.query.fy);
   runQuery(res, queries.lineage.monthlyBreakdown, { start: fy.start, end: fy.end });
@@ -224,6 +229,81 @@ app.get('/api/lineage/order/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('Lineage query failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// Search hits that never reached an order (see queries.lineage.globalSearch)
+// — same response shape as /api/lineage/order/:id but with empty arrays for
+// every order-onward stage (SJO/production/despatch/invoice), since none of
+// those can exist without an order.
+app.get('/api/lineage/quotation/:id', async (req, res) => {
+  const quotationId = Number(req.params.id);
+  if (!Number.isInteger(quotationId) || quotationId <= 0) {
+    return res.status(400).json({ error: 'Invalid quotation id' });
+  }
+  try {
+    const pool = await getPool();
+    const run = (sqlText) => pool.request().input('quotationId', quotationId).query(sqlText);
+    const [header, customerAR] = await Promise.all([
+      run(queries.lineage.headerByQuotation),
+      run(queries.lineage.customerARByQuotation)
+    ]);
+    res.json({
+      header: header.recordset[0] || null,
+      shopJobOrders: [], production: [], storeIssues: [], despatchChallans: [], invoices: [],
+      customerAR: customerAR.recordset[0] || null
+    });
+  } catch (err) {
+    console.error('Lineage (quotation) query failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.get('/api/lineage/enquiry/:id', async (req, res) => {
+  const enquiryId = Number(req.params.id);
+  if (!Number.isInteger(enquiryId) || enquiryId <= 0) {
+    return res.status(400).json({ error: 'Invalid enquiry id' });
+  }
+  try {
+    const pool = await getPool();
+    const run = (sqlText) => pool.request().input('enquiryId', enquiryId).query(sqlText);
+    const [header, customerAR] = await Promise.all([
+      run(queries.lineage.headerByEnquiry),
+      run(queries.lineage.customerARByEnquiry)
+    ]);
+    res.json({
+      header: header.recordset[0] || null,
+      shopJobOrders: [], production: [], storeIssues: [], despatchChallans: [], invoices: [],
+      customerAR: customerAR.recordset[0] || null
+    });
+  } catch (err) {
+    console.error('Lineage (enquiry) query failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+// Purchase-side lineage — a separate, shorter chain (PO -> GRN -> Bill) from
+// the sales-side endpoints above; see queries.lineage.headerByPurchaseOrder.
+app.get('/api/lineage/purchase-order/:id', async (req, res) => {
+  const poId = Number(req.params.id);
+  if (!Number.isInteger(poId) || poId <= 0) {
+    return res.status(400).json({ error: 'Invalid purchase order id' });
+  }
+  try {
+    const pool = await getPool();
+    const run = (sqlText) => pool.request().input('poId', poId).query(sqlText);
+    const [header, grn, bills, vendorAP] = await Promise.all([
+      run(queries.lineage.headerByPurchaseOrder),
+      run(queries.lineage.grnByPurchaseOrder),
+      run(queries.lineage.billsByPurchaseOrder),
+      run(queries.lineage.vendorAPByPurchaseOrder)
+    ]);
+    res.json({
+      header: header.recordset[0] || null,
+      grn: grn.recordset,
+      bills: bills.recordset,
+      vendorAP: vendorAP.recordset[0] || null
+    });
+  } catch (err) {
+    console.error('Lineage (purchase order) query failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

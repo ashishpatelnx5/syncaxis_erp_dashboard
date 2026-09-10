@@ -299,6 +299,11 @@ function initCrmFYSelect() {
   });
 }
 
+// crm.pendingFollowups' XFWBASEON: 'I' = Enquiry (Lead), 'Q' = Quotation,
+// 'O' = Sales Order — 'O' is an unverified guess per the query's own
+// comment (never observed in this data), included anyway for completeness.
+const FOLLOWUP_KIND_MAP = { I: 'enquiry', Q: 'quotation', O: 'order' };
+
 async function loadCRM() {
   initCrmFYSelect();
   // A specific month (clicking a monthly-breakdown row) always wins; otherwise
@@ -369,23 +374,23 @@ async function loadCRM() {
     ? `Invoices — ${label}` : (crmViewMode === 'all' ? `All invoices — ${fyText}` : 'Recent invoices');
 
   fillTable('table-crm-enquiries', enquiries,
-    r => `<tr><td>${r.enquiryNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.enquiryDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.quotationNo ?? '—'}</td>${dateTd(r.nextFollowUp)}</tr>`, 6);
+    r => `<tr class="clickable-row" onclick="openLineage('enquiry',${r.enquiryId})"><td>${r.enquiryNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.enquiryDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.quotationNo ?? '—'}</td>${dateTd(r.nextFollowUp)}</tr>`, 6);
   tableSummary('crm-enquiries-summary', enquiries, null, 'enquiry', null);
 
   fillTable('table-crm-quotations', quotations,
-    r => `<tr><td>${r.quotationNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.quotationValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 5);
+    r => `<tr class="clickable-row" onclick="openLineage('quotation',${r.quotationId})"><td>${r.quotationNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.quotationValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 5);
   tableSummary('crm-quotations-summary', quotations, 'quotationValue', 'quotation', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-orders', orders,
-    r => `<tr><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.orderValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td>${td(r.invoiceCount ? fmtNum(r.invoiceCount) : 'No', Number(r.invoiceCount) || 0, 'num')}<td>${r.lastInvoiceNo ?? '—'}</td>${td(r.invoicedAmount ? fmtMoney(r.invoicedAmount) : '—', Number(r.invoicedAmount) || 0, 'num')}</tr>`, 8);
+    r => `<tr class="clickable-row" onclick="openLineage('order',${r.orderId})"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${moneyTd(r.orderValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td>${td(r.invoiceCount ? fmtNum(r.invoiceCount) : 'No', Number(r.invoiceCount) || 0, 'num')}<td>${r.lastInvoiceNo ?? '—'}</td>${td(r.invoicedAmount ? fmtMoney(r.invoicedAmount) : '—', Number(r.invoicedAmount) || 0, 'num')}</tr>`, 8);
   tableSummary('crm-orders-summary', orders, 'orderValue', 'order', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-invoices', invoices,
-    r => `<tr><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
+    r => `<tr${r.orderId ? ` class="clickable-row" onclick="openLineage('order',${r.orderId})"` : ''}><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
   tableSummary('crm-invoices-summary', invoices, 'invoiceValue', 'invoice', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-followups', followups,
-    r => `<tr><td>${r.customerName ?? ''}</td><td>${r.basedOnLabel ?? r.basedOn ?? ''}</td>${dateTd(r.nextFollowUpDate)}<td>${r.salesperson ?? ''}</td><td>${r.remark ?? r.nextAgenda ?? ''}</td></tr>`, 5);
+    r => `<tr${r.docId ? ` class="clickable-row" onclick="openLineage('${FOLLOWUP_KIND_MAP[r.basedOn] || 'order'}',${r.docId})"` : ''}><td>${r.customerName ?? ''}</td><td>${r.basedOnLabel ?? r.basedOn ?? ''}</td>${dateTd(r.nextFollowUpDate)}<td>${r.salesperson ?? ''}</td><td>${r.remark ?? r.nextAgenda ?? ''}</td></tr>`, 5);
   tableSummary('crm-followups-summary', followups, null, 'follow-up', null);
 }
 
@@ -512,9 +517,35 @@ function lineageSubList(headers, rowsHtml) {
   return `<div class="lineage-sublist"><table>${thead}<tbody>${rowsHtml.join('')}</tbody></table></div>`;
 }
 
+// Ordered furthest-first so the first stage with data is the current one —
+// used for the "Current Stage" banner at the top of the timeline. Financial
+// Settlement isn't in this list: it's an ongoing account-level fact shown
+// unconditionally at the bottom, not a stage the order/lead "reaches".
+//
+// Cancelled/Deleted orders are checked FIRST, ahead of any downstream
+// progress: an order can be cancelled *after* a quotation, or even an OAF,
+// was already raised for it (real example: 25-26/SO/000084, status
+// Cancelled, still has a real OAF on record) — those stage cards below
+// still show that history, but the headline banner needs to say "this is
+// dead," not "this is actively sitting at OAF," or it reads as a live order
+// still progressing through the pipeline.
+function lineageCurrentStage(h, sjos, prod, issues, challans, invoices) {
+  if (h.orderId && (h.statusLabel === 'Cancelled' || h.statusLabel === 'Deleted')) return h.statusLabel;
+  if (invoices.length) return 'Invoice';
+  if (challans.length) return 'Despatch';
+  if (issues.length) return 'Store — Material Issued';
+  if (prod.length) return 'Work Order & Production Receipt';
+  if (sjos.length) return 'Manufacturing (Shop Job Orders)';
+  if (h.oafId) return 'Order Acceptance Form (OAF)';
+  if (h.orderId) return 'Sales Order';
+  if (h.quotationId) return 'Quotation';
+  if (h.enquiryId) return 'Lead';
+  return 'Unknown';
+}
+
 function renderLineageTimeline(data) {
   const h = data.header;
-  if (!h) return '<div class="lineage-empty-note">Order not found.</div>';
+  if (!h) return '<div class="lineage-empty-note">Record not found.</div>';
 
   const sjos = data.shopJobOrders || [];
   const prod = data.production || [];
@@ -523,23 +554,47 @@ function renderLineageTimeline(data) {
   const invoices = data.invoices || [];
   const ar = data.customerAR || {};
 
-  let html = '';
+  const currentStage = lineageCurrentStage(h, sjos, prod, issues, challans, invoices);
+  const deadStage = currentStage === 'Cancelled' || currentStage === 'Deleted';
+  let html = `
+    <div class="lineage-header-row">
+      <div class="lineage-current-stage${deadStage ? ' dead' : ''}">Current Stage: <span class="stage-name">${currentStage}</span></div>
+      <div class="lineage-legend">
+        <span class="lineage-legend-item"><span class="lineage-dot empty"></span> Not reached yet</span>
+        <span class="lineage-legend-item"><span class="lineage-dot partial"></span> In progress / partial</span>
+        <span class="lineage-legend-item"><span class="lineage-dot done"></span> Completed</span>
+        <span class="lineage-legend-item"><span class="lineage-legend-swatch dead"></span> Cancelled / Deleted</span>
+      </div>
+    </div>`;
 
-  html += lineageStage('Enquiry', null, h.enquiryId ? 'done' : 'empty',
+  html += lineageStage('Lead (Enquiry)', null, h.enquiryId ? 'done' : 'empty',
     h.enquiryId
       ? `<div class="lineage-fact-row"><span class="muted">No.</span>${h.enquiryNo} <span class="muted">Date</span>${fmtDate(h.enquiryDate)}</div>`
-      : `<div class="lineage-empty-note">No enquiry on record — order created directly.</div>`);
+      : `<div class="lineage-empty-note">No lead on record — order created directly.</div>`);
 
   html += lineageStage('Quotation', null, h.quotationId ? 'done' : 'empty',
     h.quotationId
       ? `<div class="lineage-fact-row"><span class="muted">No.</span>${h.quotationNo} <span class="muted">Date</span>${fmtDate(h.quotationDate)} <span class="muted">Value</span>${fmtMoney(h.quotationValue)}</div>`
       : `<div class="lineage-empty-note">No quotation on record.</div>`);
 
-  html += lineageStage('Customer Order / Sales Order', null, 'done',
-    `<div class="lineage-fact-row"><span class="muted">SO No.</span>${h.syncaxisOrderNo} <span class="muted">Customer PO No.</span>${h.customerRefNo || '—'}</div>
-     <div class="lineage-fact-row"><span class="muted">Date</span>${fmtDate(h.orderDate)} <span class="muted">Value</span>${fmtMoney(h.orderValue)} <span class="muted">Status</span>${h.statusLabel}</div>
-     <div class="lineage-fact-row"><span class="muted">Customer</span>${h.customerName || ''} <span class="muted">Salesperson</span>${h.salesperson || '—'}</div>
-     <div class="lineage-fact-row"><span class="muted">Item(s)</span>${h.itemNames || '—'}</div>`);
+  // Customer Order and Sales Order are two separate stages here, but both
+  // read off the same XORDDTL row underneath — SourcePro doesn't have a
+  // distinct "customer order" document, just a sales order that carries the
+  // customer's own PO number/date as one of its fields. So both stages
+  // share the same h.orderId done/empty condition; they can't be reached
+  // independently of each other in this data.
+  html += lineageStage('Customer Order', null, h.orderId ? 'done' : 'empty',
+    h.orderId
+      ? `<div class="lineage-fact-row"><span class="muted">Customer PO No.</span>${h.customerRefNo || '—'} <span class="muted">Customer PO Date</span>${h.customerRefNo ? fmtDate(h.orderDate) : '—'}</div>
+         <div class="lineage-fact-row"><span class="muted">Customer</span>${h.customerName || ''}</div>`
+      : `<div class="lineage-empty-note">No customer order yet.</div>`);
+
+  html += lineageStage('Sales Order', null, h.orderId ? 'done' : 'empty',
+    h.orderId
+      ? `<div class="lineage-fact-row"><span class="muted">SO No.</span>${h.syncaxisOrderNo} <span class="muted">Date</span>${fmtDate(h.orderDate)} <span class="muted">Value</span>${fmtMoney(h.orderValue)} <span class="muted">Status</span>${h.statusLabel}</div>
+         <div class="lineage-fact-row"><span class="muted">Salesperson</span>${h.salesperson || '—'}</div>
+         <div class="lineage-fact-row"><span class="muted">Item(s)</span>${h.itemNames || '—'}</div>`
+      : `<div class="lineage-empty-note">No sales order yet.</div>`);
 
   html += lineageStage('Order Acceptance Form (OAF)', null, h.oafId ? 'done' : 'empty',
     h.oafId
@@ -595,6 +650,75 @@ function renderLineageTimeline(data) {
   return html;
 }
 
+// Purchase-side lineage — a separate, much shorter chain than the sales
+// side above (PO -> GRN -> Bill -> Vendor Settlement), matching what
+// /api/lineage/purchase-order/:id actually returns (header/grn/bills/
+// vendorAP, not header/shopJobOrders/production/.../customerAR). Kept as
+// its own function rather than folding into renderLineageTimeline() since
+// the two domains don't share a stage list at all.
+function purchaseLineageCurrentStage(h, grn, bills) {
+  if (h.statusLabel === 'Cancelled') return 'Cancelled';
+  if (bills.length) return 'Bill';
+  if (grn.length) return 'GRN (Material Received)';
+  if (h.poId) return 'Purchase Order';
+  return 'Unknown';
+}
+
+function renderPurchaseLineageTimeline(data) {
+  const h = data.header;
+  if (!h) return '<div class="lineage-empty-note">Record not found.</div>';
+
+  const grn = data.grn || [];
+  const bills = data.bills || [];
+  const ap = data.vendorAP || {};
+
+  const currentStage = purchaseLineageCurrentStage(h, grn, bills);
+  const deadStage = currentStage === 'Cancelled';
+  let html = `
+    <div class="lineage-header-row">
+      <div class="lineage-current-stage${deadStage ? ' dead' : ''}">Current Stage: <span class="stage-name">${currentStage}</span></div>
+      <div class="lineage-legend">
+        <span class="lineage-legend-item"><span class="lineage-dot empty"></span> Not reached yet</span>
+        <span class="lineage-legend-item"><span class="lineage-dot partial"></span> In progress / partial</span>
+        <span class="lineage-legend-item"><span class="lineage-dot done"></span> Completed</span>
+        <span class="lineage-legend-item"><span class="lineage-legend-swatch dead"></span> Cancelled / Deleted</span>
+      </div>
+    </div>`;
+
+  html += lineageStage('Purchase Order', null, h.poId ? 'done' : 'empty',
+    h.poId
+      ? `<div class="lineage-fact-row"><span class="muted">PO No.</span>${h.poNo} <span class="muted">Date</span>${fmtDate(h.poDate)} <span class="muted">Value</span>${fmtMoney(h.poValue)} <span class="muted">Status</span>${h.statusLabel}</div>
+         <div class="lineage-fact-row"><span class="muted">Vendor</span>${h.vendorName || ''} <span class="muted">Received Value</span>${fmtMoney(h.receivedValue)}</div>`
+      : `<div class="lineage-empty-note">Purchase order not found.</div>`);
+
+  html += lineageStage('GRN (Material Received)', grn.length || null,
+    grn.length ? (grn.every(g => g.statusLabel === 'Cancelled') ? 'partial' : 'done') : 'empty',
+    grn.length
+      ? lineageSubList(['GRN No.', 'Receipt Date', 'Vendor Challan No.', 'Vendor Challan Date', 'Status'],
+          grn.map(g => `<tr><td>${g.grnNo}</td><td>${fmtDate(g.receiptDate)}</td><td>${g.vendorChallanNo ?? ''}</td><td>${fmtDate(g.vendorChallanDate)}</td><td>${g.statusLabel ?? ''}</td></tr>`))
+      : `<div class="lineage-empty-note">No material received yet.</div>`);
+
+  html += lineageStage('Bill', bills.length || null, bills.length ? 'done' : 'empty',
+    bills.length
+      ? lineageSubList(['Bill No.', 'Vendor Bill No.', 'Date', 'Amount'],
+          bills.map(b => `<tr><td>${b.billNo}</td><td>${b.vendorBillNo ?? ''}</td><td>${fmtDate(b.billDate)}</td><td class="num">${fmtMoney(b.billAmount)}</td></tr>`))
+      : `<div class="lineage-empty-note">Not yet billed.</div>`);
+
+  html += `
+    <div class="lineage-stage">
+      <div class="lineage-stage-marker">
+        <div class="lineage-dot ${ap.payable > 0 ? 'partial' : 'done'}"></div>
+      </div>
+      <div class="lineage-stage-body">
+        <div class="lineage-stage-title">Vendor Settlement</div>
+        <div class="lineage-fact-row"><span class="muted">Vendor's overall outstanding payable</span>${fmtMoney(ap.payable)} <span class="muted">across</span>${fmtNum(ap.outstandingEntries)} <span class="muted">entries</span></div>
+        <div class="lineage-empty-note">Account-level balance for ${h.vendorName ? h.vendorName.trim() : 'this vendor'} — not traceable to this specific bill (no reliable per-bill link found in the data), and the vendor-code match itself is unverified (see the note on finance.creditors).</div>
+      </div>
+    </div>`;
+
+  return html;
+}
+
 let lineageCurrentOrderId = null; // whichever order's detail is open, so Refresh/filter changes re-fetch it too
 
 async function loadLineageDetail(orderId) {
@@ -619,6 +743,126 @@ async function viewLineage(orderId) {
     tr.classList.toggle('selected', Number(tr.dataset.orderId) === orderId);
   });
   await loadLineageDetail(orderId);
+}
+
+// Opens the Home/Global Search lineage view for a specific record in a new
+// tab (a fresh page load, so it can't just flip the in-memory
+// `currentModule`/`lineage2CurrentSelection` state the way clicking the
+// sidebar does) — see initFromUrl() at the bottom of this file for the
+// load-time counterpart that reads these query params back out. Points at
+// the new Home page, not the deprecated Order Lineage_OLD. `kind` is one of
+// 'order'/'quotation'/'enquiry'/'purchaseOrder' — every clickable Action
+// Items row across every section uses this same helper.
+function openLineage(kind, id) {
+  if (!id) return;
+  window.open(`?tab=lineage2&kind=${kind}&id=${id}`, '_blank');
+}
+
+// ---------------- Home / Global Search (search-only landing page) ----------------
+// No FY selector, no monthly breakdown, no default "browse everything" table —
+// just a single global search box (queries.lineage.globalSearch: SO number,
+// customer, customer PO, lead/enquiry number, quotation number, or invoice
+// number) that either jumps straight into the matching lineage (one match)
+// or shows a short pick-list (several matches). A hit doesn't have to be a
+// full order — a lead with no quotation yet, or a quotation with no order
+// yet, is a valid result too (that's the whole point of Action Items'
+// "pending Quotation"/"pending Sales Order" lists), so every result carries
+// a `kind` ('order'/'quotation'/'enquiry') alongside its id, and each kind
+// has its own detail endpoint — see LINEAGE_DETAIL_ENDPOINTS below.
+//
+// Starts in a big-centered-logo "hero" layout (nothing else on screen, like
+// a search engine homepage) and collapses the search bar into a slim top
+// strip — toggled via the .compact class on #lineage2-search-wrap — the
+// moment a search runs or a specific record is opened directly (deep link),
+// so results/detail get the full page below it. The old FY/browse page
+// stays at panel-lineage ("Order Lineage_OLD") for reference only — nothing
+// in the UI links to it any more.
+let lineage2CurrentSelection = null; // { kind, id } of whichever result is open, so Refresh re-fetches it
+
+const LINEAGE_DETAIL_ENDPOINTS = {
+  order: '/api/lineage/order/',
+  quotation: '/api/lineage/quotation/',
+  enquiry: '/api/lineage/enquiry/',
+  purchaseOrder: '/api/lineage/purchase-order/'
+};
+
+// Purchase Orders use a different renderer (renderPurchaseLineageTimeline)
+// since they're a completely separate chain (PO -> GRN -> Bill) with no
+// shared stages with the sales side — see the note on that function.
+const LINEAGE_RENDERERS = {
+  order: renderLineageTimeline,
+  quotation: renderLineageTimeline,
+  enquiry: renderLineageTimeline,
+  purchaseOrder: renderPurchaseLineageTimeline
+};
+
+function setLineage2Compact(compact) {
+  document.getElementById('lineage2-search-wrap').classList.toggle('compact', compact);
+}
+
+async function loadLineage2() {
+  // A deep link (Action Items row -> new tab) already has a selection set
+  // by initFromUrl() before this runs, so land straight in compact mode
+  // instead of flashing the hero layout first.
+  if (lineage2CurrentSelection) {
+    setLineage2Compact(true);
+    await loadLineageDetail2(lineage2CurrentSelection.kind, lineage2CurrentSelection.id);
+  }
+}
+
+async function loadLineageDetail2(kind, id) {
+  const wrap = document.getElementById('lineage2-detail-wrap');
+  const timelineEl = document.getElementById('lineage2-timeline');
+  wrap.hidden = false;
+  timelineEl.innerHTML = '<div class="lineage-empty-note">Loading…</div>';
+  document.getElementById('lineage2-detail-title').textContent = 'Order Lineage — loading…';
+  try {
+    const endpoint = LINEAGE_DETAIL_ENDPOINTS[kind] || LINEAGE_DETAIL_ENDPOINTS.order;
+    const data = await fetchJSON(endpoint + id);
+    const docNo = data.header ? (data.header.syncaxisOrderNo || data.header.quotationNo || data.header.enquiryNo || data.header.poNo) : null;
+    document.getElementById('lineage2-detail-title').textContent = docNo ? `Order Lineage — ${docNo}` : 'Order Lineage';
+    const render = LINEAGE_RENDERERS[kind] || renderLineageTimeline;
+    timelineEl.innerHTML = render(data);
+  } catch (err) {
+    timelineEl.innerHTML = '<div class="lineage-empty-note">Failed to load lineage — see console.</div>';
+    console.error(err);
+  }
+}
+
+async function viewLineage2(kind, id) {
+  lineage2CurrentSelection = { kind, id };
+  document.querySelectorAll('#table-lineage2-results tbody tr').forEach(tr => {
+    tr.classList.toggle('selected', tr.dataset.kind === kind && Number(tr.dataset.id) === id);
+  });
+  await loadLineageDetail2(kind, id);
+}
+
+const LINEAGE_KIND_LABELS = { order: 'Sales Order', quotation: 'Quotation', enquiry: 'Lead', purchaseOrder: 'Purchase Order' };
+
+async function lineage2SearchSubmit() {
+  const term = document.getElementById('lineage2-search').value.trim();
+  const resultsWrap = document.getElementById('lineage2-results-wrap');
+  const detailWrap = document.getElementById('lineage2-detail-wrap');
+  if (!term) return;
+
+  setLineage2Compact(true);
+  const results = await fetchJSON('/api/lineage/global-search?q=' + encodeURIComponent(term));
+
+  if (results.length === 1) {
+    // Single, unambiguous match — skip the pick-list and go straight to it.
+    resultsWrap.hidden = true;
+    await viewLineage2(results[0].kind, results[0].id);
+    return;
+  }
+
+  detailWrap.hidden = true;
+  lineage2CurrentSelection = null;
+  resultsWrap.hidden = false;
+  document.getElementById('lineage2-results-title').textContent =
+    results.length === 0 ? 'No matches' : `${results.length} match${results.length === 1 ? '' : 'es'} for "${term}"${results.length === 50 ? ' (showing first 50)' : ''}`;
+  fillTable('table-lineage2-results', results,
+    r => `<tr class="clickable-row" onclick="viewLineage2('${r.kind}',${r.id})" data-kind="${r.kind}" data-id="${r.id}"><td>${r.docNo ?? ''}</td><td>${LINEAGE_KIND_LABELS[r.kind] || r.kind}</td><td>${r.customerRefNo ?? '—'}</td><td>${r.customerName || ''}</td>${dateTd(r.docDate)}${moneyTd(r.docValue)}<td>${r.statusLabel ?? ''}</td></tr>`, 7);
+  tableSummary('lineage2-results-summary', results, 'docValue', 'result', 'Total');
 }
 
 let salesSelectedFY = currentFYStartYear();
@@ -696,7 +940,7 @@ async function loadSales() {
     ? `Invoices — ${label}` : (salesViewMode === 'all' ? `All invoices — ${fyText}` : 'Recent invoices');
 
   fillTable('table-sales-invoices', invoices,
-    r => `<tr><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
+    r => `<tr${r.orderId ? ` class="clickable-row" onclick="openLineage('order',${r.orderId})"` : ''}><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
   tableSummary('sales-invoices-summary', invoices, 'invoiceValue', 'invoice', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 }
 
@@ -781,15 +1025,15 @@ async function loadPurchase() {
     ? `Material received — ${label}` : (purchaseViewMode === 'all' ? `All material received — ${fyText}` : 'Material received (GRN)');
 
   fillTable('table-purchase-bill-detail', bills,
-    r => `<tr><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
+    r => `<tr${r.poId ? ` class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"` : ''}><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
   tableSummary('purchase-bill-detail-summary', bills, 'billAmount', 'bill', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-purchase-orders', orders,
-    r => `<tr><td>${r.poNo ?? ''}</td><td>${r.vendorName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}${moneyTd(r.receivedValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 6);
+    r => `<tr class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"><td>${r.poNo ?? ''}</td><td>${r.vendorName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}${moneyTd(r.receivedValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 6);
   tableSummary('purchase-orders-summary', orders, 'orderValue', 'PO', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-purchase-grn', materialReceived,
-    r => `<tr><td>${r.grnNo ?? ''}</td><td>${r.poNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.receiptDate)}<td>${r.vendorChallanNo ?? ''}</td>${dateTd(r.vendorChallanDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 7);
+    r => `<tr${r.poId ? ` class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"` : ''}><td>${r.grnNo ?? ''}</td><td>${r.poNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.receiptDate)}<td>${r.vendorChallanNo ?? ''}</td>${dateTd(r.vendorChallanDate)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 7);
   tableSummary('purchase-grn-summary', materialReceived, null, 'GRN', null);
 }
 
@@ -1029,13 +1273,13 @@ async function loadPartyHistory() {
     try {
       const rows = await fetchJSON(`/api/finance/debtors/${encCode}/orders-invoices?fy=${fy}`);
       fillTable('table-finance-debtor-history', rows,
-        r => `<tr><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}${moneyTd(r.soValue)}<td>${r.soStatus ?? ''}</td><td>${r.invoiceNo ?? '—'}</td>${r.invoiceNo ? dateTd(r.invoiceDate) : '<td>—</td>'}${r.invoiceNo ? moneyTd(r.invoiceValue) : '<td>—</td>'}<td>${r.invoiceNo ? (r.invoiceStatus ?? '') : '—'}</td></tr>`, 8);
+        r => `<tr class="clickable-row" onclick="openLineage('order',${r.orderId})"><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}${moneyTd(r.soValue)}<td>${r.soStatus ?? ''}</td><td>${r.invoiceNo ?? '—'}</td>${r.invoiceNo ? dateTd(r.invoiceDate) : '<td>—</td>'}${r.invoiceNo ? moneyTd(r.invoiceValue) : '<td>—</td>'}<td>${r.invoiceNo ? (r.invoiceStatus ?? '') : '—'}</td></tr>`, 8);
     } catch (err) { console.error(err); }
   } else {
     try {
       const rows = await fetchJSON(`/api/finance/creditors/${encCode}/orders-bills?fy=${fy}`);
       fillTable('table-finance-creditor-history', rows,
-        r => `<tr><td>${r.poNo ?? ''}</td>${dateTd(r.poDate)}${moneyTd(r.poValue)}<td>${r.poStatus ?? ''}</td><td>${r.billNo ?? '—'}</td><td>${r.billNo ? (r.vendorBillNo ?? '') : '—'}</td>${r.billNo ? dateTd(r.billDate) : '<td>—</td>'}${r.billNo ? moneyTd(r.billAmount) : '<td>—</td>'}</tr>`, 8);
+        r => `<tr class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"><td>${r.poNo ?? ''}</td>${dateTd(r.poDate)}${moneyTd(r.poValue)}<td>${r.poStatus ?? ''}</td><td>${r.billNo ?? '—'}</td><td>${r.billNo ? (r.vendorBillNo ?? '') : '—'}</td>${r.billNo ? dateTd(r.billDate) : '<td>—</td>'}${r.billNo ? moneyTd(r.billAmount) : '<td>—</td>'}</tr>`, 8);
     } catch (err) { console.error(err); }
   }
 }
@@ -1110,7 +1354,7 @@ async function loadFinance() {
   tableSummary('finance-creditors-summary', creditors, 'outstandingAmount', 'vendor', debtorsIsCompleteSet ? 'Total outstanding' : 'Total outstanding (of rows shown)');
 
   fillTable('table-purchase-bills', purchaseBills,
-    r => `<tr><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
+    r => `<tr${r.poId ? ` class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"` : ''}><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
   tableSummary('finance-purchase-bills-summary', purchaseBills, 'billAmount', 'bill', billsIsCompleteSet ? 'Total' : 'Total (of rows shown)');
 }
 
@@ -1197,7 +1441,7 @@ async function loadProduction() {
     ? `Ready — ${label}` : (prodViewMode === 'all' ? `All ready — ${fyText}` : 'Ready (fully received work orders)');
 
   fillTable('table-prod-oafs', oafs,
-    r => `<tr><td>${r.oafNo ?? ''}</td>${dateTd(r.oafDate)}<td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerName || ''}</td></tr>`, 4);
+    r => `<tr class="clickable-row" onclick="openLineage('order',${r.orderId})"><td>${r.oafNo ?? ''}</td>${dateTd(r.oafDate)}<td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerName || ''}</td></tr>`, 4);
   tableSummary('prod-oafs-summary', oafs, null, 'OAF', null);
 
   fillTable('table-prod-work-orders', workOrders,
@@ -1220,6 +1464,13 @@ async function loadProduction() {
 // This dashboard is strictly read-only against SYNCAXIS (a read-only DB
 // login is used deliberately) — no editable fields here or anywhere else in
 // the app; all data entry/updates happen in SourcePro ERP itself.
+// Clicking a summary stat card jumps to (smooth-scrolls) its section further
+// down the same page, rather than navigating anywhere — everything's on one
+// Action Items screen already, this just saves the scroll.
+function scrollToActionSection(sectionId) {
+  document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 async function loadActionItems() {
   const [enquiries, quotations, workOrders, invoicing, purchaseOrders, receivablesSummary] = await Promise.all([
     fetchJSON('/api/pending/enquiries'),
@@ -1238,24 +1489,29 @@ async function loadActionItems() {
   document.getElementById('act-po-count').textContent = fmtNum(purchaseOrders.length);
   document.getElementById('act-receivables-count').textContent = fmtNum(rs.customerCount);
 
+  // Every row below opens that record's lineage on the Home/Global Search
+  // page in a new tab (openLineage(kind, id)) — Enquiries/Quotations open
+  // their Lead/Quotation-anchored view (no order exists for these yet, by
+  // definition of being on this pending list), Sales Orders open the full
+  // order lineage, and Purchase Orders open the separate PO->GRN->Bill chain.
   fillTable('table-act-enquiries', enquiries,
-    r => `<tr><td>${r.enquiryNo ?? ''}</td>${dateTd(r.enquiryDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td></tr>`, 4);
+    r => `<tr class="clickable-row" onclick="openLineage('enquiry',${r.enquiryId})"><td>${r.enquiryNo ?? ''}</td>${dateTd(r.enquiryDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td></tr>`, 4);
   tableSummary('act-enquiries-summary', enquiries, null, 'enquiry', null);
 
   fillTable('table-act-quotations', quotations,
-    r => `<tr><td>${r.quotationNo ?? ''}</td>${dateTd(r.quotationDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.quotationValue)}</tr>`, 5);
+    r => `<tr class="clickable-row" onclick="openLineage('quotation',${r.quotationId})"><td>${r.quotationNo ?? ''}</td>${dateTd(r.quotationDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.quotationValue)}</tr>`, 5);
   tableSummary('act-quotations-summary', quotations, 'quotationValue', 'quotation', 'Total value');
 
   fillTable('table-act-workorders', workOrders,
-    r => `<tr><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.soValue)}</tr>`, 5);
+    r => `<tr class="clickable-row" onclick="openLineage('order',${r.orderId})"><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}${numTd(r.daysPending)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.soValue)}</tr>`, 5);
   tableSummary('act-workorders-summary', workOrders, 'soValue', 'sales order', 'Total value');
 
   fillTable('table-act-invoicing', invoicing,
-    r => `<tr><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.soValue)}${moneyTd(r.invoicedValue)}${moneyTd(r.pendingValue)}</tr>`, 6);
+    r => `<tr class="clickable-row" onclick="openLineage('order',${r.orderId})"><td>${r.soNo ?? ''}</td>${dateTd(r.soDate)}<td>${(r.customerName || '').trim()}</td>${moneyTd(r.soValue)}${moneyTd(r.invoicedValue)}${moneyTd(r.pendingValue)}</tr>`, 6);
   tableSummary('act-invoicing-summary', invoicing, 'pendingValue', 'sales order', 'Total pending');
 
   fillTable('table-act-po', purchaseOrders,
-    r => `<tr><td>${r.poNo ?? ''}</td>${dateTd(r.poDate)}${numTd(r.daysPending)}<td>${(r.vendorName || '').trim()}</td>${moneyTd(r.poValue)}${moneyTd(r.receivedValue)}<td>${r.statusLabel ?? ''}</td></tr>`, 7);
+    r => `<tr class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"><td>${r.poNo ?? ''}</td>${dateTd(r.poDate)}${numTd(r.daysPending)}<td>${(r.vendorName || '').trim()}</td>${moneyTd(r.poValue)}${moneyTd(r.receivedValue)}<td>${r.statusLabel ?? ''}</td></tr>`, 7);
   tableSummary('act-po-summary', purchaseOrders, 'poValue', 'purchase order', 'Total value');
 }
 
@@ -1358,6 +1614,7 @@ async function loadSalesPerformance() {
 
 const loaders = {
   crm: loadCRM,
+  lineage2: loadLineage2,
   lineage: loadLineage,
   sales: loadSales,
   salesperf: loadSalesPerformance,
@@ -1370,7 +1627,8 @@ const loaders = {
 
 const titles = {
   crm: 'CRM Pipeline — Enquiry to Order',
-  lineage: 'Order Lineage — Enquiry to Despatch',
+  lineage2: 'Home — Global Search',
+  lineage: 'Order Lineage_OLD — Enquiry to Despatch',
   sales: 'Sales & Revenue',
   salesperf: 'Sales Performance Scorecard',
   purchase: 'Purchase & Vendors',
@@ -1380,7 +1638,7 @@ const titles = {
   actions: 'Action Items — Where the Pipeline is Stuck'
 };
 
-let currentModule = 'actions';
+let currentModule = 'lineage2';
 
 async function activateModule(mod) {
   currentModule = mod;
@@ -1429,7 +1687,6 @@ async function checkHealth() {
 document.querySelectorAll('.nav-item').forEach(btn => {
   btn.addEventListener('click', () => activateModule(btn.dataset.module));
 });
-document.getElementById('refreshBtn').addEventListener('click', refreshCurrent);
 document.getElementById('logoutBtn').addEventListener('click', (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
@@ -1454,6 +1711,10 @@ window.addEventListener('pageshow', (e) => {
 document.getElementById('crm-filter-all').addEventListener('click', () => setCrmViewMode('all'));
 document.getElementById('crm-filter-recent').addEventListener('click', () => setCrmViewMode('recent'));
 document.getElementById('lineage-search-btn').addEventListener('click', lineageSearchSubmit);
+document.getElementById('lineage2-search-btn').addEventListener('click', lineage2SearchSubmit);
+document.getElementById('lineage2-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') lineage2SearchSubmit();
+});
 document.getElementById('lineage-filter-all').addEventListener('click', () => setLineageViewMode('all'));
 document.getElementById('lineage-clear-btn').addEventListener('click', lineageClearSearch);
 document.getElementById('lineage-month-filter-clear').addEventListener('click', clearLineageMonth);
@@ -1497,6 +1758,40 @@ document.querySelectorAll('.data-table').forEach(t => {
   if (!NO_PAGINATION_TABLES.has(t.id)) initTablePagination(t);
 });
 
+// Deep link support for openLineage()'s new-tab links (?tab=lineage2&kind=
+// order&id=123, used by every clickable Action Items row): a new tab is a
+// fresh page load with none of the in-memory state a same-tab click would
+// have set up, so it has to be reconstructed from the URL.
+// lineage2CurrentSelection is set here (before loadLineage2() runs) because
+// that loader already checks it at the end of its own load and fetches that
+// record's detail — no separate call needed. ?tab=lineage&orderId=123 (the
+// deprecated Order Lineage_OLD page) is still recognized since nothing
+// currently points at it, but it's dead code at this point, not a live link
+// anywhere in the UI.
+function initFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const tab = params.get('tab');
+  if (tab === 'lineage') {
+    const orderId = Number(params.get('orderId'));
+    if (orderId) {
+      lineageCurrentOrderId = orderId;
+      return 'lineage';
+    }
+  }
+  if (tab === 'lineage2') {
+    // kind defaults to 'order' so a plain ?tab=lineage2&orderId=123 link
+    // still works without an explicit &kind=order.
+    const kind = params.get('kind') || 'order';
+    const id = Number(params.get('id') || params.get('orderId'));
+    if (id) {
+      lineage2CurrentSelection = { kind, id };
+      return 'lineage2';
+    }
+  }
+  // No deep link — Home (global search) is the default landing page.
+  return 'lineage2';
+}
+
 checkHealth();
 loadSessionInfo();
-activateModule('actions');
+activateModule(initFromUrl());

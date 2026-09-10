@@ -26,9 +26,9 @@
       <span id="dbStatusText"></span>
     </div>
     <div class="nav-group">
-      <button class="nav-item active" data-module="actions">Action Items</button>
+      <button class="nav-item active" data-module="lineage2">Home</button>
+      <button class="nav-item" data-module="actions">Action Items</button>
       <button class="nav-item" data-module="crm">CRM Pipeline</button>
-      <button class="nav-item" data-module="lineage">Order Lineage</button>
       <button class="nav-item" data-module="sales">Sales &amp; Revenue</button>
       <button class="nav-item" data-module="salesperf">Sales Performance</button>
       <button class="nav-item" data-module="purchase">Purchase &amp; Vendors</button>
@@ -44,7 +44,6 @@
       <h1 id="pageTitle">Sales &amp; Revenue</h1>
       <div class="header-actions">
         <span id="lastUpdated" class="muted"></span>
-        <button id="refreshBtn" class="btn">Refresh</button>
       </div>
     </header>
 
@@ -150,7 +149,34 @@
       </div>
     </section>
 
-    <!-- ===================== ORDER LINEAGE ===================== -->
+    <!-- ===================== HOME / GLOBAL SEARCH ===================== -->
+    <section class="panel" id="panel-lineage2">
+      <div class="home-search-wrap" id="lineage2-search-wrap">
+        <img class="home-logo" src="syncaxis-logo.png" alt="SYNCAXIS">
+        <div class="home-search-bar">
+          <input type="text" id="lineage2-search" placeholder="Search anything: SO no., enquiry no., quotation no., invoice no., customer, PO no.…">
+          <button id="lineage2-search-btn" class="btn">Search</button>
+        </div>
+        <p class="muted home-search-hint">Search by SO number, customer name, customer PO number, lead (enquiry) number, quotation number, or invoice number.</p>
+      </div>
+      <div class="grid-1" id="lineage2-results-wrap" hidden>
+        <div class="card">
+          <h3 id="lineage2-results-title">Results</h3>
+          <div class="table-summary" id="lineage2-results-summary"></div>
+          <table class="data-table" id="table-lineage2-results">
+            <thead><tr><th>Document No.</th><th>Type</th><th>Customer PO No.</th><th>Customer</th><th>Date</th><th>Value</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid-1" id="lineage2-detail-wrap" hidden>
+        <div class="card">
+          <h3 id="lineage2-detail-title">Order Lineage</h3>
+          <div id="lineage2-timeline"></div>
+        </div>
+      </div>
+    </section>
+
     <section class="panel" id="panel-lineage">
       <div class="crm-fy-bar">
         <label for="lineage-fy-select">Financial year</label>
@@ -647,35 +673,35 @@
 
     <section class="panel active" id="panel-actions">
       <div class="stat-row">
-        <div class="stat stat-hero">
+        <div class="stat stat-hero stat-clickable" onclick="scrollToActionSection('act-section-enquiries')">
           <div class="stat-label">Enquiries pending Quotation</div>
           <div class="stat-value" id="act-enquiries-count">—</div>
         </div>
-        <div class="stat">
+        <div class="stat stat-clickable" onclick="scrollToActionSection('act-section-quotations')">
           <div class="stat-label">Quotations pending Sales Order</div>
           <div class="stat-value" id="act-quotations-count">—</div>
         </div>
-        <div class="stat">
+        <div class="stat stat-clickable" onclick="scrollToActionSection('act-section-workorders')">
           <div class="stat-label">Sales Orders pending Work Order</div>
           <div class="stat-value" id="act-workorders-count">—</div>
         </div>
       </div>
       <div class="stat-row">
-        <div class="stat stat-alert">
+        <div class="stat stat-alert stat-clickable" onclick="scrollToActionSection('act-section-invoicing')">
           <div class="stat-label">Sales Orders pending Invoice</div>
           <div class="stat-value" id="act-invoicing-count">—</div>
         </div>
-        <div class="stat">
+        <div class="stat stat-clickable" onclick="scrollToActionSection('act-section-po')">
           <div class="stat-label">Purchase Orders pending GRN/Close</div>
           <div class="stat-value" id="act-po-count">—</div>
         </div>
-        <div class="stat stat-alert">
+        <div class="stat stat-alert stat-clickable" onclick="scrollToActionSection('act-section-receivables')">
           <div class="stat-label">Customers with outstanding receivable</div>
           <div class="stat-value" id="act-receivables-count">—</div>
         </div>
       </div>
 
-      <div class="grid-1">
+      <div class="grid-1" id="act-section-enquiries">
         <div class="card">
           <h3>Enquiries &mdash; pending Quotation</h3>
           <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Open enquiries with no quotation raised yet.</p>
@@ -687,7 +713,7 @@
         </div>
       </div>
 
-      <div class="grid-1">
+      <div class="grid-1" id="act-section-quotations">
         <div class="card">
           <h3>Quotations &mdash; pending Sales Order</h3>
           <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Open quotations with no customer PO / Sales Order yet.</p>
@@ -699,7 +725,7 @@
         </div>
       </div>
 
-      <div class="grid-1">
+      <div class="grid-1" id="act-section-workorders">
         <div class="card">
           <h3>Sales Orders &mdash; pending Work Order</h3>
           <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Confirmed sales orders with no Work Order / Shop Job Order created yet.</p>
@@ -711,7 +737,7 @@
         </div>
       </div>
 
-      <div class="grid-1">
+      <div class="grid-1" id="act-section-invoicing">
         <div class="card">
           <h3>Sales Orders &mdash; pending Invoice</h3>
           <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Sorted by the amount still un-invoiced, largest first &mdash; not by date, since most live orders are at least partially invoiced.</p>
@@ -723,7 +749,7 @@
         </div>
       </div>
 
-      <div class="grid-1">
+      <div class="grid-1" id="act-section-po">
         <div class="card">
           <h3>Purchase Orders &mdash; pending GRN / Close</h3>
           <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Open or New purchase orders &mdash; materials not fully received, GRN not done.</p>
@@ -735,7 +761,7 @@
         </div>
       </div>
 
-      <div class="grid-1">
+      <div class="grid-1" id="act-section-receivables">
         <div class="card">
           <h3>Receivables &mdash; money not received or partially received</h3>
           <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Only trackable at customer level in this data &mdash; there's no reliable link from an outstanding balance to a specific invoice. See the full list in Finance (AR / AP).</p>

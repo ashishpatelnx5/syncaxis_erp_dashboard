@@ -144,9 +144,19 @@ const queries = {
         v.MVmName AS vendorName,
         b.XBHDOCDT AS billDate,
         b.XBHACTBILLAMT AS billAmount,
-        b.XBHSTATUS AS statusCode
+        b.XBHSTATUS AS statusCode,
+        po.poId
       FROM XPURBILLHDR b
       LEFT JOIN MVNDMAST v ON b.XBHVNDCD = v.MVmVndCode
+      OUTER APPLY (
+        -- Same Bill->PO link as finance.vendorOrdersAndBills/
+        -- lineage.billsByPurchaseOrder, just walked in the other direction.
+        -- TOP 1: a bill's GRN lines should all trace to the same PO (see the
+        -- note on vendorOrdersAndBills for the verified match rate).
+        SELECT TOP 1 g.XBGPOID AS poId
+        FROM XPURBILLGRNDTL g
+        WHERE g.XBGREFID = b.XBHAUTOID AND g.XBGPOID <> '0'
+      ) po
       ${filtered ? 'WHERE b.XBHDOCDT >= @start AND b.XBHDOCDT < @end' : ''}
       ORDER BY b.XBHDOCDT DESC;
     `,
@@ -195,6 +205,7 @@ const queries = {
       SELECT ${filtered ? '' : 'TOP 10'}
         h.XGRNHAUTOID AS grnId,
         CONCAT(h.XGRNHORDYR, '/', h.XGRNHGRPCD, '/', h.XGRNHORDNO) AS grnNo,
+        po.poId,
         po.poNo,
         v.MVmName AS vendorName,
         h.XGRNHORDDT AS receiptDate,
@@ -205,7 +216,7 @@ const queries = {
       FROM XGRNHDR h
       LEFT JOIN MVNDMAST v ON h.XGRNHVNDCD = v.MVmVndCode
       OUTER APPLY (
-        SELECT TOP 1 CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo
+        SELECT TOP 1 p.POHAUTOID AS poId, CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo
         FROM XGRNDTL d
         JOIN XPOHEAD p ON p.POHAUTOID = d.XGRNDPOID
         WHERE d.XGRNDAUTOID = h.XGRNHAUTOID
@@ -301,14 +312,19 @@ const queries = {
     // Production receipts: finished/processed items received back into
     // stock (the "Produced" stage above). Not shown anywhere else in the app.
     productionReceipts: (filtered) => `
+      -- w.XWRHWONO is a denormalized text copy of the work order number, no
+      -- year/group split of its own — joined to the real XWOHDR (via the
+      -- verified XWRHWOREFID link, same as lineage.production) for the full
+      -- "YY-YY/GRP/NNNNNN" form instead.
       SELECT ${filtered ? '' : 'TOP 10'}
         w.XWRHAUTOID AS receiptId,
-        w.XWRHWONO AS workOrderNo,
+        CASE WHEN wo.XWOAUTOID IS NULL THEN w.XWRHWONO ELSE CONCAT(wo.XWOYR, '/', wo.XWOGRCD, '/', wo.XWONO) END AS workOrderNo,
         w.XWRHITMCD AS itemCode,
         w.XWRHWODT AS receiptDate,
         w.XWRHRCPQTY AS receiptQty,
         w.XWRHSTATUS AS statusCode
       FROM XWORCPHDR w
+      LEFT JOIN XWOHDR wo ON wo.XWOAUTOID = w.XWRHWOREFID
       ${filtered ? 'WHERE w.XWRHWODT >= @start AND w.XWRHWODT < @end' : ''}
       ORDER BY w.XWRHWODT DESC;
     `
@@ -452,15 +468,24 @@ const queries = {
     // account code + financial year instead, as its own reference view.)
     // OUTER APPLY keeps orders with no invoice yet (all invoice columns null)
     // and repeats the order once per invoice if it was invoiced more than once.
+    //
+    // XOBORDSTAT='N' is labelled 'Cancelled', not the original guess 'New':
+    // spot-checked against SourcePro's own Sales Order list directly on
+    // 25-26/SO/000003 and 26-27/SO/000007 (both XOBORDSTAT='N') and both
+    // show "CANCELLED" there — 2/2, no counterexamples yet. 13 orders total
+    // carry this code across the dataset; if any of the untested ones turn
+    // out not to be cancelled, this label (and the pending.invoicing /
+    // pending.workOrders exclusion below) needs revisiting.
     customerOrdersAndInvoices: (filtered) => `
       SELECT
+        o.XOBAUTOID AS orderId,
         CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS soNo,
         o.XOBORDDT AS soDate,
         o.XOBTOTDMCY AS soValue,
         CASE o.XOBORDSTAT
           WHEN 'C' THEN 'Confirmed'
           WHEN 'A' THEN 'Amended'
-          WHEN 'N' THEN 'New'
+          WHEN 'N' THEN 'Cancelled'
           WHEN 'D' THEN 'Deleted'
           WHEN 'O' THEN 'On Hold'
           ELSE o.XOBORDSTAT
@@ -471,7 +496,10 @@ const queries = {
         inv.invoiceStatus
       FROM XORDDTL o
       OUTER APPLY (
-        SELECT DISTINCT ih.XDIHINVNO AS invoiceNo, ih.XDIHINVDT AS invoiceDate, ih.XDIHAMT AS invoiceValue, ih.XDIHSTATUS AS invoiceStatus
+        -- XDIHAMTTAX (tax-incl.), not XDIHAMT (excl.) — soValue (o.XOBTOTDMCY)
+        -- is tax-inclusive, so this must match it or a fully-invoiced order
+        -- shows invoiceValue short of soValue. See pending.invoicing.
+        SELECT DISTINCT CONCAT(ih.XDIHINVYR, '/', ih.XDIHINVGRP, '/', ih.XDIHINVNO) AS invoiceNo, ih.XDIHINVDT AS invoiceDate, ih.XDIHAMTTAX AS invoiceValue, ih.XDIHSTATUS AS invoiceStatus
         FROM XOAFHDR oaf
         JOIN XDCINVDTL id ON id.XDIDOAFID = oaf.XOAFHAUTOID
         JOIN XDCINVHDR ih ON id.XDIDREFID = ih.XDIHAUTOID
@@ -492,6 +520,7 @@ const queries = {
     // blank elsewhere in this data.
     vendorOrdersAndBills: (filtered) => `
       SELECT
+        p.POHAUTOID AS poId,
         CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo,
         p.POHORDDT AS poDate,
         p.POHNETVAL AS poValue,
@@ -616,24 +645,35 @@ const queries = {
     recentEnquiries: (filtered) => `
       -- XININQSTAT confirmed via cross-check against XINQTNID (quotation link):
       -- Q = Quoted (100% have a quotation), R = Lost/Regret (100% WERE quoted
-      -- but didn't convert), O = Open (92% have no quotation yet), D = Dropped.
+      -- but didn't convert), O = Open (92% have no quotation yet — the other
+      -- 8% do have one; XININQSTAT just wasn't flipped to 'Q' when the
+      -- quotation was created, confirmed on 7 real rows), D = Dropped.
+      -- statusLabel overrides 'O' to 'Quoted' whenever a link exists, so the
+      -- displayed status always agrees with the Quotation No. column instead
+      -- of showing "Open" next to a real quotation number. Action Items'
+      -- pending.enquiries already keyed off the link (not this status field)
+      -- so it wasn't affected by the same staleness.
       SELECT ${filtered ? '' : 'TOP 10'}
         i.XINAUTOID AS enquiryId,
-        i.XININQNO AS enquiryNo,
+        CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) AS enquiryNo,
         c.MCMCUSTNM AS customerName,
         i.XININQDT AS enquiryDate,
         i.XININQSTAT AS statusCode,
-        CASE i.XININQSTAT
-          WHEN 'O' THEN 'Open'
-          WHEN 'Q' THEN 'Quoted'
-          WHEN 'R' THEN 'Lost / Regret'
-          WHEN 'D' THEN 'Dropped'
+        CASE
+          WHEN i.XININQSTAT = 'O' AND i.XINQTNID IS NOT NULL THEN 'Quoted'
+          WHEN i.XININQSTAT = 'O' THEN 'Open'
+          WHEN i.XININQSTAT = 'Q' THEN 'Quoted'
+          WHEN i.XININQSTAT = 'R' THEN 'Lost / Regret'
+          WHEN i.XININQSTAT = 'D' THEN 'Dropped'
           ELSE i.XININQSTAT
         END AS statusLabel,
         e.MEMEMPNAME AS salesperson,
         i.XINNXTFUP AS nextFollowUp,
         CASE WHEN i.XINQTNID IS NOT NULL THEN 'Quoted' ELSE 'Open' END AS quoteStatus,
-        qq.XQDQTNNO AS quotationNo
+        -- CONCAT() turns NULL args into '' rather than propagating NULL, so
+        -- a plain CONCAT here would show "//" (not blank/—) for enquiries
+        -- with no linked quotation, since qq's columns come from a LEFT JOIN.
+        CASE WHEN qq.XQDAUTOID IS NULL THEN NULL ELSE CONCAT(qq.XQDQTNYEAR, '/', qq.XQDQTNGRP, '/', qq.XQDQTNNO) END AS quotationNo
       FROM XINQDTL i
       LEFT JOIN MCUSTMST c ON i.XINCUSTCD = c.MCMCUSTCD
       LEFT JOIN MEMPMST e ON i.XINSPCODE = e.MEMEMPCODE
@@ -644,18 +684,27 @@ const queries = {
     recentQuotations: (filtered) => `
       -- XQDQNSTAT confirmed via cross-check against XORDDTL.XOBQTNID (order
       -- link): R = Order Placed / Won (99% converted to a sales order),
-      -- O = Open/pending (93% did NOT convert). XQDQUOSTATUS is a submission
-      -- sub-status: SB = Submitted, NS = Not Submitted, CN = Cancelled.
+      -- O = Open/pending (93% did NOT convert — the other 7% do have an
+      -- order; XQDQNSTAT just wasn't flipped to 'R' when the order was
+      -- placed, confirmed on 6 real FY2025-26 rows, same staleness as
+      -- XININQSTAT on enquiries). XQDQUOSTATUS is a submission sub-status:
+      -- SB = Submitted, NS = Not Submitted, CN = Cancelled.
+      -- statusLabel overrides 'O' to 'Order Placed' whenever an order is
+      -- actually linked, so the displayed status always agrees with the
+      -- SO No. column instead of showing "Open" next to a real order
+      -- number. Action Items' pending.quotations already keyed off the
+      -- link (not this status field) so it wasn't affected.
       SELECT ${filtered ? '' : 'TOP 10'}
         q.XQDAUTOID AS quotationId,
-        q.XQDQTNNO AS quotationNo,
+        CONCAT(q.XQDQTNYEAR, '/', q.XQDQTNGRP, '/', q.XQDQTNNO) AS quotationNo,
         c.MCMCUSTNM AS customerName,
         q.XQDQTNDT AS quotationDate,
         q.XQDTOTDMCY AS quotationValue,
         q.XQDQNSTAT AS statusCode,
-        CASE q.XQDQNSTAT
-          WHEN 'O' THEN 'Open'
-          WHEN 'R' THEN 'Order Placed'
+        CASE
+          WHEN q.XQDQNSTAT = 'O' AND so.syncaxisOrderNo IS NOT NULL THEN 'Order Placed'
+          WHEN q.XQDQNSTAT = 'O' THEN 'Open'
+          WHEN q.XQDQNSTAT = 'R' THEN 'Order Placed'
           ELSE q.XQDQNSTAT
         END AS statusLabel,
         CASE q.XQDQUOSTATUS
@@ -680,10 +729,11 @@ const queries = {
       ORDER BY q.XQDQTNDT DESC;
     `,
     recentOrders: (filtered) => `
-      -- XOBORDSTAT labels are a BEST GUESS — unlike enquiry/quotation status,
-      -- there's no downstream link to cross-check these against. C is the
-      -- default state for 89% of orders across the full date range (so most
-      -- likely "Confirmed", not "Cancelled"). VERIFY before relying on this.
+      -- XOBORDSTAT labels — C is the default state for 89% of orders across
+      -- the full date range (so most likely "Confirmed"). N is labelled
+      -- 'Cancelled', not the original guess 'New' — see the note on
+      -- finance.customerOrdersAndInvoices for the spot-check evidence
+      -- (2/13 confirmed so far). Still VERIFY A/O if relying on those.
       -- XOBORDNO is the CUSTOMER's own PO/reference (values like "VERBAL" or
       -- a customer's SAP PO number confirm this) — it is NOT the SYNCAXIS
       -- sales order number. The real internal SO number is assembled from
@@ -699,7 +749,7 @@ const queries = {
         CASE o.XOBORDSTAT
           WHEN 'C' THEN 'Confirmed'
           WHEN 'A' THEN 'Amended'
-          WHEN 'N' THEN 'New'
+          WHEN 'N' THEN 'Cancelled'
           WHEN 'D' THEN 'Deleted'
           WHEN 'O' THEN 'On Hold'
           ELSE o.XOBORDSTAT
@@ -707,7 +757,7 @@ const queries = {
         e.MEMEMPNAME AS salesperson,
         inv.invoiceCount,
         inv.invoicedAmount,
-        inv.lastInvoiceNo
+        lastInv.lastInvoiceNo
       FROM XORDDTL o
       LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
       LEFT JOIN MEMPMST e ON o.XOBSPCODE = e.MEMEMPCODE
@@ -716,15 +766,33 @@ const queries = {
         -- header (verified: customer names match end-to-end on real data).
         -- DISTINCT on invoice header first, since XDCINVDTL has multiple
         -- line rows per invoice and would otherwise double-count amounts.
-        SELECT COUNT(*) AS invoiceCount, SUM(XDIHAMT) AS invoicedAmount, MAX(XDIHINVNO) AS lastInvoiceNo
+        -- invoicedAmount uses XDIHAMTTAX (tax-incl.) to match orderValue
+        -- (o.XOBTOTDMCY, also tax-incl.) — see the note on pending.invoicing
+        -- for why the tax-excl. XDIHAMT made fully-invoiced orders look
+        -- partially invoiced here.
+        SELECT COUNT(*) AS invoiceCount, SUM(XDIHAMTTAX) AS invoicedAmount
         FROM (
-          SELECT DISTINCT ih.XDIHAUTOID, ih.XDIHAMT, ih.XDIHINVNO
+          SELECT DISTINCT ih.XDIHAUTOID, ih.XDIHAMTTAX
           FROM XOAFHDR oaf
           JOIN XDCINVDTL id ON id.XDIDOAFID = oaf.XOAFHAUTOID
           JOIN XDCINVHDR ih ON id.XDIDREFID = ih.XDIHAUTOID
           WHERE oaf.XOAFHORDID = o.XOBAUTOID
         ) DistinctInv
       ) inv
+      OUTER APPLY (
+        -- Separate APPLY (not folded into the aggregate above) because
+        -- picking "the latest invoice's full number" needs an ORDER BY +
+        -- TOP 1 on a real row, not an aggregate like MAX() — MAX() on a
+        -- bare invoice number ignores year/group entirely and was also
+        -- comparing across different invoice series as if they were one
+        -- sortable sequence.
+        SELECT TOP 1 CONCAT(ih.XDIHINVYR, '/', ih.XDIHINVGRP, '/', ih.XDIHINVNO) AS lastInvoiceNo
+        FROM XOAFHDR oaf
+        JOIN XDCINVDTL id ON id.XDIDOAFID = oaf.XOAFHAUTOID
+        JOIN XDCINVHDR ih ON id.XDIDREFID = ih.XDIHAUTOID
+        WHERE oaf.XOAFHORDID = o.XOBAUTOID
+        ORDER BY ih.XDIHINVDT DESC
+      ) lastInv
       ${filtered ? 'WHERE o.XOBORDDT >= @start AND o.XOBORDDT < @end' : ''}
       ORDER BY o.XOBORDDT DESC;
     `,
@@ -738,16 +806,17 @@ const queries = {
       -- in this data spans more than one distinct order, so TOP 1 is safe.
       SELECT ${filtered ? '' : 'TOP 10'}
         h.XDIHAUTOID AS invoiceId,
-        h.XDIHINVNO AS invoiceNo,
+        CONCAT(h.XDIHINVYR, '/', h.XDIHINVGRP, '/', h.XDIHINVNO) AS invoiceNo,
         c.MCMCUSTNM AS customerName,
         h.XDIHINVDT AS invoiceDate,
         h.XDIHAMT AS invoiceValue,
         h.XDIHSTATUS AS statusCode,
+        so.orderId,
         so.syncaxisOrderNo
       FROM XDCINVHDR h
       LEFT JOIN MCUSTMST c ON h.XDIHCUSTCD = c.MCMCUSTCD
       OUTER APPLY (
-        SELECT TOP 1 CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS syncaxisOrderNo
+        SELECT TOP 1 o.XOBAUTOID AS orderId, CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS syncaxisOrderNo
         FROM XDCINVDTL d
         JOIN XOAFHDR oaf ON d.XDIDOAFID = oaf.XOAFHAUTOID
         JOIN XORDDTL o ON oaf.XOAFHORDID = o.XOBAUTOID
@@ -851,6 +920,272 @@ const queries = {
         ORDER BY o.XOBORDDT DESC;
       `;
     },
+    // True cross-document search for the "Order Lineage" (new, search-only)
+    // page: one term can match at the SO/customer/PO level directly, or at
+    // any of the three documents that feed into an order, each resolved
+    // back to its order via the same links already verified elsewhere in
+    // this file — Quotation via XOBQTNID (recentQuotations), Enquiry via
+    // Quotation.XQDINQID (recentEnquiries/pending.enquiries), Invoice via
+    // OAF -> XDCINVDTL -> XDCINVHDR (lineage.invoices/pending.invoicing).
+    // UNION (not UNION ALL) inside MatchedOrderIds so an order matched via
+    // more than one path (e.g. its own SO number AND its invoice number
+    // both contain the typed digits) only appears once.
+    //
+    // Also matches quotations and enquiries that never made it to an order
+    // — Action Items' "pending Quotation"/"pending Sales Order" lists are
+    // full of these, and a search box that can't find them isn't a *global*
+    // search. Each is its own kind (order/quotation/enquiry) with its own
+    // detail endpoint (see server.js /api/lineage/{order,quotation,enquiry}
+    // /:id and headerByQuotation/headerByEnquiry below) since there's no
+    // order row to key a lineage view off yet. The quotation branch only
+    // includes quotations with NOT EXISTS an order (otherwise it'd
+    // double-list something the order branch above already found via its
+    // own quotation-number match), and the enquiry branch the same via any
+    // of its quotations.
+    globalSearch: `
+      WITH MatchedOrderIds AS (
+        SELECT o.XOBAUTOID AS orderId
+        FROM XORDDTL o
+        LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
+        WHERE c.MCMCUSTNM LIKE '%' + @search + '%'
+           OR o.XOBORDNO LIKE '%' + @search + '%'
+           OR CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) LIKE '%' + @search + '%'
+
+        UNION
+
+        SELECT o.XOBAUTOID
+        FROM XORDDTL o
+        JOIN XQTNDTL q ON o.XOBQTNID = q.XQDAUTOID
+        WHERE CONCAT(q.XQDQTNYEAR, '/', q.XQDQTNGRP, '/', q.XQDQTNNO) LIKE '%' + @search + '%'
+
+        UNION
+
+        SELECT o.XOBAUTOID
+        FROM XORDDTL o
+        JOIN XQTNDTL q ON o.XOBQTNID = q.XQDAUTOID
+        JOIN XINQDTL i ON q.XQDINQID = i.XINAUTOID
+        WHERE CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) LIKE '%' + @search + '%'
+
+        UNION
+
+        SELECT o.XOBAUTOID
+        FROM XORDDTL o
+        JOIN XOAFHDR oaf ON oaf.XOAFHORDID = o.XOBAUTOID
+        JOIN XDCINVDTL id ON id.XDIDOAFID = oaf.XOAFHAUTOID
+        JOIN XDCINVHDR ih ON id.XDIDREFID = ih.XDIHAUTOID
+        WHERE ih.XDIHINVNO LIKE '%' + @search + '%'
+           OR CONCAT(ih.XDIHINVYR, '/', ih.XDIHINVGRP, '/', ih.XDIHINVNO) LIKE '%' + @search + '%'
+      )
+      SELECT TOP 50 * FROM (
+        SELECT
+          'order' AS kind,
+          o.XOBAUTOID AS id,
+          CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS docNo,
+          o.XOBORDNO AS customerRefNo,
+          c.MCMCUSTNM AS customerName,
+          o.XOBORDDT AS docDate,
+          o.XOBTOTDMCY AS docValue,
+          CASE o.XOBORDSTAT
+            WHEN 'C' THEN 'Confirmed' WHEN 'A' THEN 'Amended' WHEN 'N' THEN 'Cancelled'
+            WHEN 'D' THEN 'Deleted' WHEN 'O' THEN 'On Hold' ELSE o.XOBORDSTAT
+          END AS statusLabel,
+          items.itemNames
+        FROM MatchedOrderIds mo
+        JOIN XORDDTL o ON o.XOBAUTOID = mo.orderId
+        LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
+        OUTER APPLY (
+          SELECT STRING_AGG(itemName, ', ') AS itemNames
+          FROM (
+            SELECT DISTINCT LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName
+            FROM XORDITMDLV d
+            LEFT JOIN MITMMAST m ON d.XORDSITMCD = m.MIMITMICOD
+            WHERE d.XORDAUTOID = o.XOBAUTOID
+          ) x
+        ) items
+
+        UNION ALL
+
+        SELECT
+          'quotation' AS kind,
+          q.XQDAUTOID AS id,
+          CONCAT(q.XQDQTNYEAR, '/', q.XQDQTNGRP, '/', q.XQDQTNNO) AS docNo,
+          NULL AS customerRefNo,
+          c.MCMCUSTNM AS customerName,
+          q.XQDQTNDT AS docDate,
+          q.XQDTOTDMCY AS docValue,
+          'Quoted — no order yet' AS statusLabel,
+          NULL AS itemNames
+        FROM XQTNDTL q
+        LEFT JOIN MCUSTMST c ON q.XQDCUSTCD = c.MCMCUSTCD
+        LEFT JOIN XINQDTL i ON q.XQDINQID = i.XINAUTOID
+        WHERE (CONCAT(q.XQDQTNYEAR, '/', q.XQDQTNGRP, '/', q.XQDQTNNO) LIKE '%' + @search + '%'
+               OR c.MCMCUSTNM LIKE '%' + @search + '%'
+               OR CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) LIKE '%' + @search + '%')
+          AND NOT EXISTS (SELECT 1 FROM XORDDTL o WHERE o.XOBQTNID = q.XQDAUTOID)
+
+        UNION ALL
+
+        SELECT
+          'enquiry' AS kind,
+          i.XINAUTOID AS id,
+          CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) AS docNo,
+          NULL AS customerRefNo,
+          c.MCMCUSTNM AS customerName,
+          i.XININQDT AS docDate,
+          NULL AS docValue,
+          'Lead — no quotation yet' AS statusLabel,
+          NULL AS itemNames
+        FROM XINQDTL i
+        LEFT JOIN MCUSTMST c ON i.XINCUSTCD = c.MCMCUSTCD
+        WHERE (CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) LIKE '%' + @search + '%'
+               OR c.MCMCUSTNM LIKE '%' + @search + '%')
+          -- Excludes any lead that already has a quotation at all (not just
+          -- one that went on to become an order) — a lead that's already
+          -- been quoted isn't its own dead-end result, it's part of that
+          -- quotation's lineage. Without this a lead+quotation pair (e.g.
+          -- 26-27/SI/000089 -> 26-27/SQ/000093) showed up as two separate,
+          -- inconsistent search hits: clicking the lead showed only the
+          -- lead, clicking the quotation showed lead+quotation both.
+          AND NOT EXISTS (SELECT 1 FROM XQTNDTL q2 WHERE q2.XQDINQID = i.XINAUTOID)
+
+        UNION ALL
+
+        -- Purchase side — a separate, short chain (PO -> GRN -> Bill), not
+        -- part of the Enquiry->Invoice sales chain above. See
+        -- headerByPurchaseOrder for the full detail-view query.
+        SELECT
+          'purchaseOrder' AS kind,
+          p.POHAUTOID AS id,
+          CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS docNo,
+          NULL AS customerRefNo,
+          v.MVmName AS customerName,
+          p.POHORDDT AS docDate,
+          p.POHNETVAL AS docValue,
+          CASE p.POHSTATUS
+            WHEN 'C' THEN 'Closed' WHEN 'O' THEN 'Open' WHEN 'N' THEN 'New' WHEN 'D' THEN 'Cancelled'
+            ELSE p.POHSTATUS
+          END AS statusLabel,
+          NULL AS itemNames
+        FROM XPOHEAD p
+        LEFT JOIN MVNDMAST v ON p.POHVNDCODE = v.MVmVndCode
+        WHERE CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) LIKE '%' + @search + '%'
+           OR v.MVmName LIKE '%' + @search + '%'
+      ) results
+      ORDER BY docDate DESC;
+    `,
+    // Detail-view headers for a search hit that stopped short of becoming an
+    // order (kind='quotation'/'enquiry' above) — same field *names* as
+    // lineage.header's enquiry/quotation columns so renderLineageTimeline()
+    // on the client needs no kind-specific branching, just orderId/oafId
+    // left absent so those stages render as their existing empty state.
+    headerByQuotation: `
+      SELECT
+        i.XINAUTOID AS enquiryId,
+        CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) AS enquiryNo,
+        i.XININQDT AS enquiryDate,
+        q.XQDAUTOID AS quotationId,
+        CONCAT(q.XQDQTNYEAR, '/', q.XQDQTNGRP, '/', q.XQDQTNNO) AS quotationNo,
+        q.XQDQTNDT AS quotationDate,
+        q.XQDTOTDMCY AS quotationValue,
+        c.MCMCUSTNM AS customerName,
+        e.MEMEMPNAME AS salesperson
+      FROM XQTNDTL q
+      LEFT JOIN XINQDTL i ON q.XQDINQID = i.XINAUTOID
+      LEFT JOIN MCUSTMST c ON q.XQDCUSTCD = c.MCMCUSTCD
+      LEFT JOIN MEMPMST e ON q.XQNSPCODE = e.MEMEMPCODE
+      WHERE q.XQDAUTOID = @quotationId;
+    `,
+    customerARByQuotation: `
+      SELECT
+        ISNULL(SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM), 0) AS receivable,
+        COUNT(*) AS outstandingEntries
+      FROM XOUTSTNDHDR
+      WHERE XOH_DR_CR = 'D'
+        AND XOH_ACCCD = (SELECT XQDCUSTCD FROM XQTNDTL WHERE XQDAUTOID = @quotationId);
+    `,
+    headerByEnquiry: `
+      SELECT
+        i.XINAUTOID AS enquiryId,
+        CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) AS enquiryNo,
+        i.XININQDT AS enquiryDate,
+        c.MCMCUSTNM AS customerName,
+        e.MEMEMPNAME AS salesperson
+      FROM XINQDTL i
+      LEFT JOIN MCUSTMST c ON i.XINCUSTCD = c.MCMCUSTCD
+      LEFT JOIN MEMPMST e ON i.XINSPCODE = e.MEMEMPCODE
+      WHERE i.XINAUTOID = @enquiryId;
+    `,
+    customerARByEnquiry: `
+      SELECT
+        ISNULL(SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM), 0) AS receivable,
+        COUNT(*) AS outstandingEntries
+      FROM XOUTSTNDHDR
+      WHERE XOH_DR_CR = 'D'
+        AND XOH_ACCCD = (SELECT XINCUSTCD FROM XINQDTL WHERE XINAUTOID = @enquiryId);
+    `,
+    // ---- Purchase-side lineage (PO -> GRN -> Bill -> Vendor Settlement) ----
+    // A separate, much shorter chain from the sales-side one above — reuses
+    // the same verified joins already proven out in queries.purchase
+    // (materialReceived: GRN->PO via XGRNDTL.XGRNDPOID) and
+    // finance.vendorOrdersAndBills (Bill->PO via XPURBILLGRNDTL.XBGPOID).
+    // POHSTATUS is a real, verified status field here (unlike sales
+    // XOBORDSTAT) — see the note on purchase.orders: 'C'=Closed correlates
+    // 100% with a populated close date + linked GRN, 'D'=Cancelled.
+    headerByPurchaseOrder: `
+      SELECT
+        p.POHAUTOID AS poId,
+        CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo,
+        p.POHORDDT AS poDate,
+        p.POHNETVAL AS poValue,
+        p.POHRCPVAL AS receivedValue,
+        p.POHSTATUS AS statusCode,
+        CASE p.POHSTATUS
+          WHEN 'C' THEN 'Closed' WHEN 'O' THEN 'Open' WHEN 'N' THEN 'New' WHEN 'D' THEN 'Cancelled'
+          ELSE p.POHSTATUS
+        END AS statusLabel,
+        v.MVmName AS vendorName,
+        p.POHVNDCODE AS vendorCode
+      FROM XPOHEAD p
+      LEFT JOIN MVNDMAST v ON p.POHVNDCODE = v.MVmVndCode
+      WHERE p.POHAUTOID = @poId;
+    `,
+    grnByPurchaseOrder: `
+      SELECT DISTINCT
+        h.XGRNHAUTOID AS grnId,
+        CONCAT(h.XGRNHORDYR, '/', h.XGRNHGRPCD, '/', h.XGRNHORDNO) AS grnNo,
+        h.XGRNHORDDT AS receiptDate,
+        h.XGRNHCHALNO AS vendorChallanNo,
+        h.XGRNHCHALDT AS vendorChallanDate,
+        CASE h.XGRNHSTATUS WHEN 'O' THEN 'Open' WHEN 'D' THEN 'Cancelled' ELSE h.XGRNHSTATUS END AS statusLabel
+      FROM XGRNDTL d
+      JOIN XGRNHDR h ON h.XGRNHAUTOID = d.XGRNDAUTOID
+      WHERE d.XGRNDPOID = @poId
+      ORDER BY h.XGRNHORDDT;
+    `,
+    billsByPurchaseOrder: `
+      SELECT DISTINCT
+        b.XBHAUTOID AS billId,
+        CONCAT(b.XBHYEAR, '/', b.XBHGRP, '/', b.XBHNO) AS billNo,
+        b.XBHDOCDT AS billDate,
+        b.XBHACTBILLAMT AS billAmount,
+        b.XBHVNDBILLNO AS vendorBillNo
+      FROM XPURBILLGRNDTL g
+      JOIN XPURBILLHDR b ON g.XBGREFID = b.XBHAUTOID
+      WHERE g.XBGPOID = @poId AND g.XBGPOID <> '0'
+      ORDER BY b.XBHDOCDT;
+    `,
+    // Mirrors lineage.customerAR, payable side: XOH_DR_CR='C'. XOH_ACCCD ->
+    // MVmVndCode is UNVERIFIED here (see the note on finance.creditors) —
+    // shown anyway since it's the same account-level best-effort the
+    // sales-side Financial Settlement stage already makes for receivables.
+    vendorAPByPurchaseOrder: `
+      SELECT
+        ISNULL(SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM), 0) AS payable,
+        COUNT(*) AS outstandingEntries
+      FROM XOUTSTNDHDR
+      WHERE XOH_DR_CR = 'C'
+        AND XOH_ACCCD = (SELECT POHVNDCODE FROM XPOHEAD WHERE POHAUTOID = @poId);
+    `,
     // FY-bound monthly order count/value for this page's own breakdown —
     // same 12-row-always shape as crm.monthlyBreakdown, but orders only.
     monthlyBreakdown: `
@@ -876,19 +1211,20 @@ const queries = {
         o.XOBORDDT AS orderDate,
         o.XOBTOTDMCY AS orderValue,
         o.XOBORDSTAT AS statusCode,
+        -- N -> 'Cancelled', see the note on finance.customerOrdersAndInvoices
         CASE o.XOBORDSTAT
-          WHEN 'C' THEN 'Confirmed' WHEN 'A' THEN 'Amended' WHEN 'N' THEN 'New'
+          WHEN 'C' THEN 'Confirmed' WHEN 'A' THEN 'Amended' WHEN 'N' THEN 'Cancelled'
           WHEN 'D' THEN 'Deleted' WHEN 'O' THEN 'On Hold' ELSE o.XOBORDSTAT
         END AS statusLabel,
         c.MCMCUSTNM AS customerName,
         o.XOBCUSTCD AS customerCode,
         e.MEMEMPNAME AS salesperson,
         q.XQDAUTOID AS quotationId,
-        q.XQDQTNNO AS quotationNo,
+        CONCAT(q.XQDQTNYEAR, '/', q.XQDQTNGRP, '/', q.XQDQTNNO) AS quotationNo,
         q.XQDQTNDT AS quotationDate,
         q.XQDTOTDMCY AS quotationValue,
         i.XINAUTOID AS enquiryId,
-        i.XININQNO AS enquiryNo,
+        CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) AS enquiryNo,
         i.XININQDT AS enquiryDate,
         oaf.XOAFHAUTOID AS oafId,
         CONCAT(oaf.XOAFHYEAR, '/', oaf.XOAFHGRPCD, '/', oaf.XOAFHNO) AS oafNo,
@@ -934,7 +1270,7 @@ const queries = {
     `,
     production: `
       SELECT
-        wo.XWONO AS workOrderNo,
+        CASE WHEN wo.XWOAUTOID IS NULL THEN NULL ELSE CONCAT(wo.XWOYR, '/', wo.XWOGRCD, '/', wo.XWONO) END AS workOrderNo,
         wo.XWOITMCD AS itemCode,
         LTRIM(RTRIM(REPLACE(REPLACE(m.MIMNAME, CHAR(13), ''), CHAR(10), ''))) AS itemName,
         wo.XWOQTYORD AS orderedQty,
@@ -1017,11 +1353,15 @@ const queries = {
     // XDIDITMCD joins straight to MITMMAST.MIMITMICOD (verified) — unlike
     // Store Issues/Despatch, no XSTKIDEN indirection needed here.
     invoices: `
+      -- invoiceValue uses XDIHAMTTAX (tax-incl.) to match what SourcePro's
+      -- own DC-cum-Invoice screen calls "Total Amount with Taxes", and what
+      -- this order's XOBTOTDMCY represents — see pending.invoicing for why
+      -- XDIHAMT (excl. tax) makes a fully-invoiced order look short.
       SELECT DISTINCT
         ih.XDIHAUTOID AS invoiceId,
         ih.XDIHINVNO AS invoiceNo,
         ih.XDIHINVDT AS invoiceDate,
-        ih.XDIHAMT AS invoiceValue,
+        ih.XDIHAMTTAX AS invoiceValue,
         ih.XDIHSTATUS AS statusCode,
         items.itemNames
       FROM XOAFHDR oaf
@@ -1041,11 +1381,17 @@ const queries = {
     `,
     customerAR: `
       -- Account-level, NOT specific to this order/invoice — see module note.
+      -- outstandingEntries counts only the 'D' (receivable) rows, matching
+      -- the WHERE filter, not COUNT(*) over the account's whole ledger —
+      -- that used to include 'C' (payment/credit) rows too, so a customer
+      -- with 2 receivable entries and 2 payments against them showed
+      -- "...across 4 entries" next to a total that only 2 of them made up.
       SELECT
-        ISNULL(SUM(CASE WHEN XOH_DR_CR = 'D' THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END), 0) AS receivable,
+        ISNULL(SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM), 0) AS receivable,
         COUNT(*) AS outstandingEntries
       FROM XOUTSTNDHDR
-      WHERE XOH_ACCCD = (SELECT XOBCUSTCD FROM XORDDTL WHERE XOBAUTOID = @orderId);
+      WHERE XOH_DR_CR = 'D'
+        AND XOH_ACCCD = (SELECT XOBCUSTCD FROM XORDDTL WHERE XOBAUTOID = @orderId);
     `
   },
 
@@ -1139,6 +1485,7 @@ const queries = {
         oaf.XOAFHAUTOID AS oafId,
         CONCAT(oaf.XOAFHYEAR, '/', oaf.XOAFHGRPCD, '/', oaf.XOAFHNO) AS oafNo,
         oaf.XOAFHDATE AS oafDate,
+        o.XOBAUTOID AS orderId,
         CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS syncaxisOrderNo,
         c.MCMCUSTNM AS customerName
       FROM XOAFHDR oaf
@@ -1208,6 +1555,7 @@ const queries = {
     // link): 'Q' status enquiries have a quotation 146/146 of the time.
     enquiries: `
       SELECT
+        i.XINAUTOID AS enquiryId,
         CONCAT(i.XININQYR, '/', i.XININQGRP, '/', i.XININQNO) AS enquiryNo,
         i.XININQDT AS enquiryDate,
         DATEDIFF(DAY, i.XININQDT, GETDATE()) AS daysPending,
@@ -1216,12 +1564,13 @@ const queries = {
       LEFT JOIN MCUSTMST c ON i.XINCUSTCD = c.MCMCUSTCD
       WHERE i.XININQSTAT = 'O'
         AND NOT EXISTS (SELECT 1 FROM XQTNDTL q WHERE q.XQDINQID = i.XINAUTOID)
-      ORDER BY i.XININQDT ASC;
+      ORDER BY i.XININQDT DESC;
     `,
     // Open quotations (XQDQNSTAT='O') with no linked sales order — i.e. no
     // customer PO received/converted yet. Verified via XOBQTNID.
     quotations: `
       SELECT
+        q.XQDAUTOID AS quotationId,
         CONCAT(q.XQDQTNYEAR, '/', q.XQDQTNGRP, '/', q.XQDQTNNO) AS quotationNo,
         q.XQDQTNDT AS quotationDate,
         DATEDIFF(DAY, q.XQDQTNDT, GETDATE()) AS daysPending,
@@ -1231,13 +1580,15 @@ const queries = {
       LEFT JOIN MCUSTMST c ON q.XQDCUSTCD = c.MCMCUSTCD
       WHERE q.XQDQNSTAT = 'O'
         AND NOT EXISTS (SELECT 1 FROM XORDDTL o WHERE o.XOBQTNID = q.XQDAUTOID)
-      ORDER BY q.XQDQTNDT ASC;
+      ORDER BY q.XQDQTNDT DESC;
     `,
-    // Live sales orders (excludes XOBORDSTAT='D', 2 rows) with no Work Order/
-    // Shop Job Order created yet — same Order->OAF->XSJOHDR chain verified in
-    // lineage.production.
+    // Live sales orders (excludes XOBORDSTAT='D' [Deleted, 2 rows] and 'N'
+    // [Cancelled, 13 rows — see the note on finance.customerOrdersAndInvoices])
+    // with no Work Order/Shop Job Order created yet — same Order->OAF->XSJOHDR
+    // chain verified in lineage.production.
     workOrders: `
       SELECT
+        o.XOBAUTOID AS orderId,
         CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS soNo,
         o.XOBORDDT AS soDate,
         DATEDIFF(DAY, o.XOBORDDT, GETDATE()) AS daysPending,
@@ -1245,21 +1596,37 @@ const queries = {
         o.XOBTOTDMCY AS soValue
       FROM XORDDTL o
       LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
-      WHERE o.XOBORDSTAT <> 'D'
+      WHERE o.XOBORDSTAT NOT IN ('D', 'N')
         AND NOT EXISTS (
           SELECT 1 FROM XOAFHDR oaf JOIN XSJOHDR s ON s.XSHOAFID = oaf.XOAFHAUTOID
           WHERE oaf.XOAFHORDID = o.XOBAUTOID
         )
-      ORDER BY o.XOBORDDT ASC;
+      ORDER BY o.XOBORDDT DESC;
     `,
     // Live sales orders not yet fully invoiced (invoiced amount < order
-    // value), sorted by the size of the pending amount — not by date — since
-    // ~85% of live orders are at least partially invoiced in this data
-    // (multi-shipment invoicing is normal here), so date order would bury the
-    // orders with the most money still un-invoiced under a wall of near-done
-    // ones. Same OAF->Invoice chain as crm.recentOrders.
+    // value), sorted by order date, most recent first. Same OAF->Invoice
+    // chain as crm.recentOrders.
+    //
+    // Uses XDIHAMTTAX (invoice total incl. tax), not XDIHAMT (excl. tax):
+    // o.XOBTOTDMCY (the order value we compare against) is itself tax-
+    // inclusive — verified against SourcePro directly on 25-26/SO/000009
+    // (RAAD Systems): a single, fully-covering invoice has XDIHAMTTAX =
+    // 99,472.11 = XOBTOTDMCY exactly, while XDIHAMT is only 82,298.40.
+    // Comparing tax-excl. invoiced against tax-incl. order value had 220 of
+    // 270 rows in this list wrongly flagged as pending (fully invoiced/
+    // closed orders showing a fake ~15-20% gap) — fixed by matching bases.
+    //
+    // The pendingValue > 1 (not > 0) threshold below is a deliberate
+    // rounding tolerance: closed orders like 25-26/SO/000047 and
+    // 26-27/SO/000017 still showed up with a "pending" amount of a few
+    // paise (0.02, 0.28) after the tax-basis fix above — leftover
+    // round-off noise from summing per-line tax across multiple invoices,
+    // confirmed by comparing SUM(XDIHAMTTAX) to XOBTOTDMCY directly. A
+    // genuine unbilled order is at minimum hundreds of rupees in this data,
+    // so >1 filters the noise without hiding real partial invoicing.
     invoicing: `
       SELECT
+        o.XOBAUTOID AS orderId,
         CONCAT(o.XOBIntOrdYr, '/', o.XOBIntOrdGrp, '/', o.XOBIntOrdNo) AS soNo,
         o.XOBORDDT AS soDate,
         ISNULL(c.MCMCUSTNM, o.XOBCUSTCD) AS customerName,
@@ -1269,18 +1636,18 @@ const queries = {
       FROM XORDDTL o
       LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
       OUTER APPLY (
-        SELECT SUM(XDIHAMT) AS invoicedAmount
+        SELECT SUM(XDIHAMTTAX) AS invoicedAmount
         FROM (
-          SELECT DISTINCT ih.XDIHAUTOID, ih.XDIHAMT
+          SELECT DISTINCT ih.XDIHAUTOID, ih.XDIHAMTTAX
           FROM XOAFHDR oaf
           JOIN XDCINVDTL id ON id.XDIDOAFID = oaf.XOAFHAUTOID
           JOIN XDCINVHDR ih ON id.XDIDREFID = ih.XDIHAUTOID
           WHERE oaf.XOAFHORDID = o.XOBAUTOID
         ) d
       ) inv
-      WHERE o.XOBORDSTAT <> 'D'
-        AND ISNULL(inv.invoicedAmount, 0) < o.XOBTOTDMCY
-      ORDER BY pendingValue DESC;
+      WHERE o.XOBORDSTAT NOT IN ('D', 'N')
+        AND o.XOBTOTDMCY - ISNULL(inv.invoicedAmount, 0) > 1
+      ORDER BY o.XOBORDDT DESC;
     `,
     // Purchase Orders not yet closed (POHSTATUS 'O'=Open or 'N'=New) —
     // excludes 'D' (Cancelled, 8 rows). POHSTATUS='C' correlates 100% with a
@@ -1288,6 +1655,7 @@ const queries = {
     // so 'O'/'N' reliably means "GRN not done / materials not fully received".
     purchaseOrders: `
       SELECT
+        p.POHAUTOID AS poId,
         CONCAT(p.POHORDYEAR, '/', p.POHGRPCD, '/', p.POHORDNO) AS poNo,
         p.POHORDDT AS poDate,
         DATEDIFF(DAY, p.POHORDDT, GETDATE()) AS daysPending,
@@ -1298,7 +1666,7 @@ const queries = {
       FROM XPOHEAD p
       LEFT JOIN MVNDMAST v ON p.POHVNDCODE = v.MVmVndCode
       WHERE p.POHSTATUS IN ('O', 'N')
-      ORDER BY p.POHORDDT ASC;
+      ORDER BY p.POHORDDT DESC;
     `,
     // Receivables can only be tracked at customer level, not per-invoice —
     // XOUTSTNDHDR has no reliable link to a specific invoice (see the

@@ -260,6 +260,15 @@ body {
 .stat-hero .stat-value { font-size: 30px; }
 .stat-alert .stat-value { color: var(--red); }
 
+.stat-clickable {
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+.stat-clickable:hover {
+  box-shadow: 0 2px 8px rgba(22, 50, 79, 0.12);
+  transform: translateY(-1px);
+}
+
 /* ---------- Grids & cards ---------- */
 .grid-2 {
   display: grid;
@@ -508,6 +517,133 @@ body {
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
+}
+
+/* ---------- Home / Global Search ---------- */
+/* Google-homepage-style: big centered logo + search box with nothing else
+   on screen until a search runs, then it collapses into a slim top bar
+   (like Google's own search-results page) so the results/detail below get
+   the room. Toggled via the .compact class (added in dashboard.js the
+   moment a search is submitted or a result is opened). */
+.home-search-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 12vh 0 8vh;
+  transition: padding 0.2s ease;
+}
+.home-search-wrap.compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 0 20px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.home-logo {
+  height: 72px;
+  transition: height 0.2s ease;
+}
+.home-search-wrap.compact .home-logo {
+  height: 30px;
+}
+.home-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 560px;
+}
+.home-search-wrap.compact .home-search-bar {
+  max-width: 420px;
+}
+.home-search-bar input {
+  flex: 1;
+  font-family: var(--font);
+  font-size: 14px;
+  padding: 12px 18px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 4px rgba(22, 50, 79, 0.08);
+}
+.home-search-bar input:focus {
+  outline: none;
+  border-color: var(--steel);
+  box-shadow: 0 1px 6px rgba(22, 50, 79, 0.16);
+}
+.home-search-wrap.compact .home-search-bar input {
+  padding: 8px 14px;
+  border-radius: 18px;
+}
+.home-search-bar .btn {
+  border-radius: 20px;
+  padding: 10px 20px;
+}
+.home-search-wrap.compact .home-search-bar .btn {
+  padding: 7px 16px;
+  border-radius: 16px;
+}
+.home-search-hint {
+  text-align: center;
+}
+.home-search-wrap.compact .home-search-hint {
+  display: none;
+}
+
+.lineage-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lineage-current-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--navy);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.lineage-current-stage .stage-name {
+  font-weight: 700;
+}
+.lineage-current-stage.dead {
+  background: var(--red);
+}
+
+.lineage-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.lineage-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.lineage-legend .lineage-dot {
+  margin-top: 0;
+}
+.lineage-legend-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--red);
+  flex-shrink: 0;
 }
 
 /* ---------- Order Lineage ---------- */
