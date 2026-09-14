@@ -345,6 +345,7 @@ app.get('/api/inventory/production-receipts', (req, res) => {
 // ---------- Finance ----------
 app.get('/api/finance/summary', (req, res) => runQuery(res, queries.finance.summary));
 app.get('/api/finance/aging', (req, res) => runQuery(res, queries.finance.aging));
+app.get('/api/finance/aging-payable', (req, res) => runQuery(res, queries.finance.agingPayable));
 app.get('/api/finance/monthly-breakdown', (req, res) => {
   const fy = parseFYRange(req.query.fy);
   runQuery(res, queries.finance.monthlyBreakdown, { start: fy.start, end: fy.end });

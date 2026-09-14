@@ -19,7 +19,13 @@
     <div class="sidebar-user">
       <div class="user-avatar" id="userAvatar">?</div>
       <span id="userName" class="user-name">—</span>
-      <button id="logoutBtn" class="sidebar-logout" title="Sign out">Sign out</button>
+      <button id="themeToggleBtn" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">
+        <svg class="theme-icon-sun" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
+        <svg class="theme-icon-moon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" hidden><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"></path></svg>
+      </button>
+      <button id="logoutBtn" class="icon-btn" title="Sign out" aria-label="Sign out">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+      </button>
     </div>
     <div class="sidebar-footer">
       <span id="dbStatusDot" class="status-dot"></span>
@@ -474,24 +480,44 @@
 
     <!-- ===================== FINANCE ===================== -->
     <section class="panel" id="panel-finance">
-      <div class="stat-row">
-        <div class="stat stat-hero">
+      <div class="stat-row" style="grid-template-columns: repeat(4, 1fr);">
+        <div class="stat stat-hero stat-clickable" onclick="scrollToActionSection('fin-section-debtors')">
           <div class="stat-label">Total receivable</div>
-          <div class="stat-value" id="fin-receivable">—</div>
+          <div class="stat-value-row">
+            <div class="stat-subcount" id="fin-receivable-count"></div>
+            <div class="stat-value" id="fin-receivable">—</div>
+          </div>
         </div>
-        <div class="stat">
+        <div class="stat stat-clickable" onclick="scrollToActionSection('fin-section-creditors')">
           <div class="stat-label">Total payable</div>
-          <div class="stat-value" id="fin-payable">—</div>
+          <div class="stat-value-row">
+            <div class="stat-subcount" id="fin-payable-count"></div>
+            <div class="stat-value" id="fin-payable">—</div>
+          </div>
         </div>
-        <div class="stat stat-alert">
+        <div class="stat stat-alert stat-clickable" onclick="scrollToActionSection('fin-section-debtors')">
           <div class="stat-label">Overdue receivable</div>
-          <div class="stat-value" id="fin-overdue">—</div>
+          <div class="stat-value-row">
+            <div class="stat-subcount" id="fin-overdue-count"></div>
+            <div class="stat-value" id="fin-overdue">—</div>
+          </div>
+        </div>
+        <div class="stat stat-alert stat-clickable" onclick="scrollToActionSection('fin-section-creditors')">
+          <div class="stat-label">Overdue payable</div>
+          <div class="stat-value-row">
+            <div class="stat-subcount" id="fin-overdue-payable-count"></div>
+            <div class="stat-value" id="fin-overdue-payable">—</div>
+          </div>
         </div>
       </div>
-      <div class="grid-1">
+      <div class="grid-2">
         <div class="card">
           <h3>Receivables aging</h3>
           <canvas id="chart-aging"></canvas>
+        </div>
+        <div class="card">
+          <h3>Payables aging</h3>
+          <canvas id="chart-aging-payable"></canvas>
         </div>
       </div>
       <div class="crm-fy-bar">
@@ -517,7 +543,7 @@
         <button id="finance-debtors-filter-all" class="btn-link">Show all</button>
         <button id="finance-debtors-filter-recent" class="btn-link">Show most recent</button>
       </div>
-      <div class="grid-1">
+      <div class="grid-1" id="fin-section-debtors">
         <div class="card">
           <h3 id="finance-debtors-title">Debtors — outstanding receivable by customer</h3>
           <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Click a row to see this customer's Sales Orders &amp; Invoices.</p>
@@ -542,7 +568,7 @@
           </table>
         </div>
       </div>
-      <div class="grid-1">
+      <div class="grid-1" id="fin-section-creditors">
         <div class="card">
           <h3 id="finance-creditors-title">Creditors — outstanding payable by vendor</h3>
           <p class="muted" style="margin: -4px 0 10px; font-size: 12.5px;">Click a row to see this vendor's Purchase Orders &amp; Bills.</p>
@@ -602,11 +628,11 @@
       </div>
       <div class="grid-2">
         <div class="card">
-          <h3>Work orders by status code</h3>
+          <h3>Work orders by status</h3>
           <canvas id="chart-wo-status"></canvas>
         </div>
         <div class="card">
-          <h3>Shop Job Orders by status code</h3>
+          <h3>Shop Job Orders by status</h3>
           <canvas id="chart-sjo-status"></canvas>
         </div>
       </div>
@@ -675,29 +701,47 @@
       <div class="stat-row">
         <div class="stat stat-hero stat-clickable" onclick="scrollToActionSection('act-section-enquiries')">
           <div class="stat-label">Enquiries pending Quotation</div>
-          <div class="stat-value" id="act-enquiries-count">—</div>
+          <div class="stat-value-row">
+            <div class="stat-value" id="act-enquiries-count">—</div>
+            <div class="stat-subvalue stat-subvalue-muted" id="act-enquiries-value">No value on file</div>
+          </div>
         </div>
         <div class="stat stat-clickable" onclick="scrollToActionSection('act-section-quotations')">
           <div class="stat-label">Quotations pending Sales Order</div>
-          <div class="stat-value" id="act-quotations-count">—</div>
+          <div class="stat-value-row">
+            <div class="stat-value" id="act-quotations-count">—</div>
+            <div class="stat-subvalue" id="act-quotations-value"></div>
+          </div>
         </div>
         <div class="stat stat-clickable" onclick="scrollToActionSection('act-section-workorders')">
           <div class="stat-label">Sales Orders pending Work Order</div>
-          <div class="stat-value" id="act-workorders-count">—</div>
+          <div class="stat-value-row">
+            <div class="stat-value" id="act-workorders-count">—</div>
+            <div class="stat-subvalue" id="act-workorders-value"></div>
+          </div>
         </div>
       </div>
       <div class="stat-row">
         <div class="stat stat-alert stat-clickable" onclick="scrollToActionSection('act-section-invoicing')">
           <div class="stat-label">Sales Orders pending Invoice</div>
-          <div class="stat-value" id="act-invoicing-count">—</div>
+          <div class="stat-value-row">
+            <div class="stat-value" id="act-invoicing-count">—</div>
+            <div class="stat-subvalue" id="act-invoicing-value"></div>
+          </div>
         </div>
         <div class="stat stat-clickable" onclick="scrollToActionSection('act-section-po')">
           <div class="stat-label">Purchase Orders pending GRN/Close</div>
-          <div class="stat-value" id="act-po-count">—</div>
+          <div class="stat-value-row">
+            <div class="stat-value" id="act-po-count">—</div>
+            <div class="stat-subvalue" id="act-po-value"></div>
+          </div>
         </div>
         <div class="stat stat-alert stat-clickable" onclick="scrollToActionSection('act-section-receivables')">
           <div class="stat-label">Customers with outstanding receivable</div>
-          <div class="stat-value" id="act-receivables-count">—</div>
+          <div class="stat-value-row">
+            <div class="stat-value" id="act-receivables-count">—</div>
+            <div class="stat-subvalue" id="act-receivables-value"></div>
+          </div>
         </div>
       </div>
 

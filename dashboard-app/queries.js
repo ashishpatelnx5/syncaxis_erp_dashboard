@@ -145,6 +145,12 @@ const queries = {
         b.XBHDOCDT AS billDate,
         b.XBHACTBILLAMT AS billAmount,
         b.XBHSTATUS AS statusCode,
+        -- Only 2 values in this data (908 'O', 3 'D'). Labelled by the same
+        -- O=Open/D=Cancelled convention verified independently on POHSTATUS,
+        -- XGRNHSTATUS and XIHSTATUS elsewhere in this file — not directly
+        -- confirmed against SourcePro's own bill screen, but consistent
+        -- with every other status field in this procure-to-pay chain.
+        CASE b.XBHSTATUS WHEN 'O' THEN 'Open' WHEN 'D' THEN 'Cancelled' ELSE b.XBHSTATUS END AS statusLabel,
         po.poId
       FROM XPURBILLHDR b
       LEFT JOIN MVNDMAST v ON b.XBHVNDCD = v.MVmVndCode
@@ -322,7 +328,12 @@ const queries = {
         w.XWRHITMCD AS itemCode,
         w.XWRHWODT AS receiptDate,
         w.XWRHRCPQTY AS receiptQty,
-        w.XWRHSTATUS AS statusCode
+        w.XWRHSTATUS AS statusCode,
+        -- Only 2 values (491 'C', 2 'D'). C=Completed/D=Cancelled by the
+        -- same convention verified on XWOSTATUS/POHSTATUS elsewhere (a
+        -- receipt record only exists once production is done, so 'C' here
+        -- plausibly means the receipt itself, not the work order).
+        CASE w.XWRHSTATUS WHEN 'C' THEN 'Completed' WHEN 'D' THEN 'Cancelled' ELSE w.XWRHSTATUS END AS statusLabel
       FROM XWORCPHDR w
       LEFT JOIN XWOHDR wo ON wo.XWOAUTOID = w.XWRHWOREFID
       ${filtered ? 'WHERE w.XWRHWODT >= @start AND w.XWRHWODT < @end' : ''}
@@ -335,11 +346,37 @@ const queries = {
     // XOH_DR_CR: assumed 'D' = receivable (owed to us), 'C' = payable (we owe)
     // VERIFY the actual values used in your data via diagnostics.sql.
     summary: `
+      -- Netted per customer/vendor, same methodology as pending.
+      -- receivablesSummary and finance.debtors/creditors (group by account,
+      -- HAVING |net balance| > 0.01) — NOT a plain COUNT(DISTINCT XOH_ACCCD
+      -- WHERE XOH_DR_CR='D'), which counts anyone with at least one debit
+      -- ROW even if their debits and credits net to ~zero (already settled,
+      -- just unmatched/uncleared ledger entries). That naive version showed
+      -- 174 "customers with outstanding receivable" against Action Items'
+      -- 77 for the exact same rupee total — 97 of those 174 net to ~zero.
+      WITH RecvByAcc AS (
+        SELECT XOH_ACCCD, SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM) AS bal,
+          SUM(CASE WHEN XOH_DUE_DATE < GETDATE() THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END) AS overdueBal
+        FROM XOUTSTNDHDR WHERE XOH_DR_CR = 'D'
+        GROUP BY XOH_ACCCD
+        HAVING ABS(SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM)) > 0.01
+      ),
+      PayByAcc AS (
+        SELECT XOH_ACCCD, SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM) AS bal,
+          SUM(CASE WHEN XOH_DUE_DATE < GETDATE() THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END) AS overdueBal
+        FROM XOUTSTNDHDR WHERE XOH_DR_CR = 'C'
+        GROUP BY XOH_ACCCD
+        HAVING ABS(SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM)) > 0.01
+      )
       SELECT
-        ISNULL(SUM(CASE WHEN XOH_DR_CR = 'D' THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END), 0) AS totalReceivable,
-        ISNULL(SUM(CASE WHEN XOH_DR_CR = 'C' THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END), 0) AS totalPayable,
-        ISNULL(SUM(CASE WHEN XOH_DR_CR = 'D' AND XOH_DUE_DATE < GETDATE() THEN XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM ELSE 0 END), 0) AS overdueReceivable
-      FROM XOUTSTNDHDR;
+        ISNULL((SELECT SUM(bal) FROM RecvByAcc), 0) AS totalReceivable,
+        (SELECT COUNT(*) FROM RecvByAcc) AS receivableCount,
+        ISNULL((SELECT SUM(bal) FROM PayByAcc), 0) AS totalPayable,
+        (SELECT COUNT(*) FROM PayByAcc) AS payableCount,
+        ISNULL((SELECT SUM(overdueBal) FROM RecvByAcc), 0) AS overdueReceivable,
+        (SELECT COUNT(*) FROM RecvByAcc WHERE ABS(overdueBal) > 0.01) AS overdueReceivableCount,
+        ISNULL((SELECT SUM(overdueBal) FROM PayByAcc), 0) AS overduePayable,
+        (SELECT COUNT(*) FROM PayByAcc WHERE ABS(overdueBal) > 0.01) AS overduePayableCount;
     `,
     aging: `
       SELECT
@@ -353,6 +390,31 @@ const queries = {
         SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM) AS amount
       FROM XOUTSTNDHDR
       WHERE XOH_DR_CR = 'D'
+      GROUP BY
+        CASE
+          WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) <= 0 THEN '0. Not yet due'
+          WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) BETWEEN 1 AND 30 THEN '1. 1-30 days'
+          WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) BETWEEN 31 AND 60 THEN '2. 31-60 days'
+          WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) BETWEEN 61 AND 90 THEN '3. 61-90 days'
+          ELSE '4. 90+ days'
+        END
+      ORDER BY bucket;
+    `,
+    // Payable-side mirror of aging above (XOH_DR_CR='C' instead of 'D') —
+    // same bucket boundaries, so Payables aging sits directly alongside
+    // Receivables aging instead of only the customer side having one.
+    agingPayable: `
+      SELECT
+        CASE
+          WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) <= 0 THEN '0. Not yet due'
+          WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) BETWEEN 1 AND 30 THEN '1. 1-30 days'
+          WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) BETWEEN 31 AND 60 THEN '2. 31-60 days'
+          WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) BETWEEN 61 AND 90 THEN '3. 61-90 days'
+          ELSE '4. 90+ days'
+        END AS bucket,
+        SUM(XOH_TRN_AMT_DOM - XOH_ADJ_AMT_DOM) AS amount
+      FROM XOUTSTNDHDR
+      WHERE XOH_DR_CR = 'C'
       GROUP BY
         CASE
           WHEN DATEDIFF(DAY, XOH_DUE_DATE, GETDATE()) <= 0 THEN '0. Not yet due'
@@ -499,7 +561,14 @@ const queries = {
         -- XDIHAMTTAX (tax-incl.), not XDIHAMT (excl.) — soValue (o.XOBTOTDMCY)
         -- is tax-inclusive, so this must match it or a fully-invoiced order
         -- shows invoiceValue short of soValue. See pending.invoicing.
-        SELECT DISTINCT CONCAT(ih.XDIHINVYR, '/', ih.XDIHINVGRP, '/', ih.XDIHINVNO) AS invoiceNo, ih.XDIHINVDT AS invoiceDate, ih.XDIHAMTTAX AS invoiceValue, ih.XDIHSTATUS AS invoiceStatus
+        -- XDIHSTATUS: 'O' -> 'Open' by convention with POHSTATUS/XGRNHSTATUS
+        -- elsewhere in this database (both reliably use 'O' for that). 'N'
+        -- is left as the raw code — unlike 'O', it's NOT consistent across
+        -- this schema (means 'Cancelled' on XOBORDSTAT, 'New' on POHSTATUS)
+        -- and there's no other field on this table that disambiguates it;
+        -- PENDING VERIFICATION directly against SourcePro.
+        SELECT DISTINCT CONCAT(ih.XDIHINVYR, '/', ih.XDIHINVGRP, '/', ih.XDIHINVNO) AS invoiceNo, ih.XDIHINVDT AS invoiceDate, ih.XDIHAMTTAX AS invoiceValue,
+          CASE ih.XDIHSTATUS WHEN 'O' THEN 'Open' ELSE ih.XDIHSTATUS END AS invoiceStatus
         FROM XOAFHDR oaf
         JOIN XDCINVDTL id ON id.XDIDOAFID = oaf.XOAFHAUTOID
         JOIN XDCINVHDR ih ON id.XDIDREFID = ih.XDIHAUTOID
@@ -798,9 +867,14 @@ const queries = {
     `,
     recentInvoices: (filtered) => `
       -- XDCINVHDR, not XINVHDR (empty) — see the note on the sales queries.
-      -- XDIHSTATUS values seen: 'O' (97%) and 'N' (3%) — meaning unverified,
-      -- shown as raw code. Salesperson/customer-PO fields on this table are
-      -- blank for every row in this data, so they're not included here.
+      -- XDIHSTATUS values seen: 'O' (97%) and 'N' (3%) — 'O' -> 'Open' by
+      -- convention with POHSTATUS/XGRNHSTATUS elsewhere in this database
+      -- (both reliably use 'O' for that); 'N' is left as the raw code since
+      -- it's NOT consistent across this schema (means 'Cancelled' on
+      -- XOBORDSTAT, 'New' on POHSTATUS) and nothing else on this table
+      -- disambiguates it — PENDING VERIFICATION directly against SourcePro.
+      -- Salesperson/customer-PO fields on this table are blank for every
+      -- row in this data, so they're not included here.
       -- Sales order traced back via Invoice -> XDCINVDTL -> XOAFHDR -> Order
       -- (same chain used forward on the orders table); confirmed no invoice
       -- in this data spans more than one distinct order, so TOP 1 is safe.
@@ -811,6 +885,7 @@ const queries = {
         h.XDIHINVDT AS invoiceDate,
         h.XDIHAMT AS invoiceValue,
         h.XDIHSTATUS AS statusCode,
+        CASE h.XDIHSTATUS WHEN 'O' THEN 'Open' ELSE h.XDIHSTATUS END AS statusLabel,
         so.orderId,
         so.syncaxisOrderNo
       FROM XDCINVHDR h
@@ -904,6 +979,10 @@ const queries = {
           o.XOBORDDT AS orderDate,
           o.XOBTOTDMCY AS orderValue,
           o.XOBORDSTAT AS statusCode,
+          CASE o.XOBORDSTAT
+            WHEN 'C' THEN 'Confirmed' WHEN 'A' THEN 'Amended' WHEN 'N' THEN 'Cancelled'
+            WHEN 'D' THEN 'Deleted' WHEN 'O' THEN 'On Hold' ELSE o.XOBORDSTAT
+          END AS statusLabel,
           items.itemNames
         FROM XORDDTL o
         LEFT JOIN MCUSTMST c ON o.XOBCUSTCD = c.MCMCUSTCD
@@ -1260,6 +1339,20 @@ const queries = {
         s.XSHORDQTY AS orderedQty,
         s.XSHCOMPQTY AS completedQty,
         s.XSHSJOSTAT AS statusCode,
+        -- 5 values seen: F=487 rows (100% have XSHORDQTY<=XSHCOMPQTY, i.e.
+        -- fully completed — confirms 'F'=Finished, and confirms the "done"
+        -- vs "partial" dot the lineage timeline already inferred from this
+        -- code, see dashboardCurrentStage below), D=11 (0% complete,
+        -- Cancelled by the same convention as every other status field in
+        -- this schema). N/P/W (65/3/7 rows) are NOT independently verified
+        -- — labelled as the plausible expansion of the letter itself
+        -- (New/Partial/Work in progress), all 0% complete, consistent with
+        -- "not yet finished" but not distinguished further than that.
+        CASE s.XSHSJOSTAT
+          WHEN 'F' THEN 'Finished' WHEN 'D' THEN 'Cancelled'
+          WHEN 'N' THEN 'New' WHEN 'P' THEN 'Partial' WHEN 'W' THEN 'Work in Progress'
+          ELSE s.XSHSJOSTAT
+        END AS statusLabel,
         s.XSHSJODT AS sjoDate,
         s.XSHCMPLTDT AS completedDate
       FROM XOAFHDR oaf
@@ -1276,6 +1369,21 @@ const queries = {
         wo.XWOQTYORD AS orderedQty,
         wo.XWOQTYRECV AS receivedQty,
         wo.XWOSTATUS AS statusCode,
+        -- 4 values seen, cross-checked against XWOCLOSDT/qty-received:
+        -- C=489 rows, 100% have a close date AND full receipt -> 'Closed'
+        -- (matches the "done" dot the lineage timeline already infers from
+        -- this code, see the JS side). O=4 rows, 0% close date/0% received
+        -- -> genuinely still 'Open'. D=8 rows, 0% either -> 'Cancelled' by
+        -- the same convention as every other status field in this schema.
+        -- N=22 rows is the interesting one: ALL 22 have a close date (like
+        -- C) but NONE are fully received (like O/D) — i.e. manually closed
+        -- before completion, not "New" as the letter might suggest.
+        -- Labelled 'Short Closed' on that data pattern, not confirmed
+        -- against SourcePro's own screen.
+        CASE wo.XWOSTATUS
+          WHEN 'C' THEN 'Closed' WHEN 'O' THEN 'Open' WHEN 'D' THEN 'Cancelled' WHEN 'N' THEN 'Short Closed'
+          ELSE wo.XWOSTATUS
+        END AS statusLabel,
         wo.XWODT AS workOrderDate,
         wo.XWOCLOSDT AS closedDate,
         wr.XWRHRCPQTY AS receiptQty,
@@ -1302,6 +1410,9 @@ const queries = {
         i.XIHISSNO AS issueNo,
         i.XIHISSDT AS issueDate,
         i.XIHSTATUS AS statusCode,
+        -- Only 2 values (930 'O', 20 'D'). O=Open/D=Cancelled by the same
+        -- convention verified on POHSTATUS/XGRNHSTATUS/XBHSTATUS elsewhere.
+        CASE i.XIHSTATUS WHEN 'O' THEN 'Open' WHEN 'D' THEN 'Cancelled' ELSE i.XIHSTATUS END AS statusLabel,
         CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo,
         items.itemNames
       FROM XOAFHDR oaf
@@ -1333,6 +1444,11 @@ const queries = {
         h.XDCHDCNO AS challanNo,
         h.XDCHDATE AS challanDate,
         h.XDCHSTAT AS statusCode,
+        -- Tiny sample (17 headers total): O=8, C=8, N=1. O=Open/C=Closed by
+        -- the convention verified elsewhere; 'N' left as the raw code — on
+        -- XWOSTATUS 'N' turned out NOT to mean "New" (see that query's
+        -- comment), so it's not assumed here on a single-row sample either.
+        CASE h.XDCHSTAT WHEN 'O' THEN 'Open' WHEN 'C' THEN 'Closed' ELSE h.XDCHSTAT END AS statusLabel,
         items.itemNames
       FROM XOAFHDR oaf
       JOIN XDCDTL d ON d.XDCDOAFID = oaf.XOAFHAUTOID
@@ -1359,10 +1475,13 @@ const queries = {
       -- XDIHAMT (excl. tax) makes a fully-invoiced order look short.
       SELECT DISTINCT
         ih.XDIHAUTOID AS invoiceId,
-        ih.XDIHINVNO AS invoiceNo,
+        CONCAT(ih.XDIHINVYR, '/', ih.XDIHINVGRP, '/', ih.XDIHINVNO) AS invoiceNo,
         ih.XDIHINVDT AS invoiceDate,
         ih.XDIHAMTTAX AS invoiceValue,
         ih.XDIHSTATUS AS statusCode,
+        -- XDIHSTATUS: 'O' -> 'Open' (safe by convention, see recentInvoices
+        -- above); 'N' left as the raw code — unverified, see that note.
+        CASE ih.XDIHSTATUS WHEN 'O' THEN 'Open' ELSE ih.XDIHSTATUS END AS statusLabel,
         items.itemNames
       FROM XOAFHDR oaf
       JOIN XDCINVDTL d ON d.XDIDOAFID = oaf.XOAFHAUTOID
@@ -1406,19 +1525,30 @@ const queries = {
         SUM(CASE WHEN XWOCLOSDT IS NULL AND XWODUEDT < GETDATE() THEN 1 ELSE 0 END) AS overdueWorkOrders
       FROM XWOHDR;
     `,
+    // XWOSTATUS labels cross-checked against XWOCLOSDT/qty-received — see
+    // the full reasoning on lineage.production's copy of this same CASE.
     statusBreakdown: `
       SELECT
         XWOSTATUS AS statusCode,
+        CASE XWOSTATUS
+          WHEN 'C' THEN 'Closed' WHEN 'O' THEN 'Open' WHEN 'D' THEN 'Cancelled' WHEN 'N' THEN 'Short Closed'
+          ELSE XWOSTATUS
+        END AS statusLabel,
         COUNT(*) AS count
       FROM XWOHDR
       GROUP BY XWOSTATUS
       ORDER BY count DESC;
-      -- VERIFY: map XWOSTATUS codes to friendly labels (Open/In-Progress/Closed/etc.)
-      -- once you confirm them — see diagnostics.sql.
     `,
+    // XSHSJOSTAT labels cross-checked against qty-complete — see the full
+    // reasoning on lineage.shopJobOrders' copy of this same CASE.
     sjoStatus: `
       SELECT
         XSHSJOSTAT AS statusCode,
+        CASE XSHSJOSTAT
+          WHEN 'F' THEN 'Finished' WHEN 'D' THEN 'Cancelled'
+          WHEN 'N' THEN 'New' WHEN 'P' THEN 'Partial' WHEN 'W' THEN 'Work in Progress'
+          ELSE XSHSJOSTAT
+        END AS statusLabel,
         COUNT(*) AS count
       FROM XSJOHDR
       GROUP BY XSHSJOSTAT
@@ -1504,6 +1634,10 @@ const queries = {
         w.XWOQTYORD AS orderedQty,
         w.XWOQTYRECV AS receivedQty,
         w.XWOSTATUS AS statusCode,
+        CASE w.XWOSTATUS
+          WHEN 'C' THEN 'Closed' WHEN 'O' THEN 'Open' WHEN 'D' THEN 'Cancelled' WHEN 'N' THEN 'Short Closed'
+          ELSE w.XWOSTATUS
+        END AS statusLabel,
         w.XWOCLOSDT AS closedDate
       FROM XWOHDR w
       ${filtered ? 'WHERE w.XWODT >= @start AND w.XWODT < @end' : ''}
@@ -1517,7 +1651,8 @@ const queries = {
         i.XIHISSNO AS issueNo,
         i.XIHISSDT AS issueDate,
         CONCAT(s.XSHSJOYEAR, '/', s.XSHSJOGRP, '/', s.XSHSJONO) AS sjoNo,
-        i.XIHSTATUS AS statusCode
+        i.XIHSTATUS AS statusCode,
+        CASE i.XIHSTATUS WHEN 'O' THEN 'Open' WHEN 'D' THEN 'Cancelled' ELSE i.XIHSTATUS END AS statusLabel
       FROM XISSHDR i
       LEFT JOIN XSJOHDR s ON i.XIHDOCID = s.XSHSJAUTONO AND i.XIHSJOWOTYP = 'S'
       WHERE i.XIHSJOWOTYP = 'S'

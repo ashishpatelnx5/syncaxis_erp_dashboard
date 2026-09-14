@@ -386,7 +386,7 @@ async function loadCRM() {
   tableSummary('crm-orders-summary', orders, 'orderValue', 'order', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-invoices', invoices,
-    r => `<tr${r.orderId ? ` class="clickable-row" onclick="openLineage('order',${r.orderId})"` : ''}><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
+    r => `<tr${r.orderId ? ` class="clickable-row" onclick="openLineage('order',${r.orderId})"` : ''}><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
   tableSummary('crm-invoices-summary', invoices, 'invoiceValue', 'invoice', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-crm-followups', followups,
@@ -489,7 +489,7 @@ async function lineageSearch() {
   const url = '/api/lineage/orders' + (params.length ? '?' + params.join('&') : '');
   const orders = await fetchJSON(url);
   fillTable('table-lineage-orders', orders,
-    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}<td>${r.statusCode ?? ''}</td><td>${r.itemNames || '—'}</td></tr>`, 7);
+    r => `<tr onclick="viewLineage(${r.orderId})" data-order-id="${r.orderId}"><td>${r.syncaxisOrderNo ?? ''}</td><td>${r.customerRefNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.orderDate)}${moneyTd(r.orderValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.itemNames || '—'}</td></tr>`, 7);
   tableSummary('lineage-orders-summary', orders, 'orderValue', 'order', (lineageSelectedMonth || (!term && lineageViewMode === 'all')) ? 'Total' : 'Total (of rows shown)');
 
   const isSearching = !!term;
@@ -601,30 +601,33 @@ function renderLineageTimeline(data) {
       ? `<div class="lineage-fact-row"><span class="muted">No.</span>${h.oafNo} <span class="muted">Date</span>${fmtDate(h.oafDate)}</div>`
       : `<div class="lineage-empty-note">No OAF on record.</div>`);
 
+  // 'F' (Finished) and 'C' (Closed) are now a verified read of
+  // XSHSJOSTAT/XWOSTATUS — see the CASE comments on lineage.shopJobOrders/
+  // lineage.production in queries.js for the qty-correlation evidence.
   html += lineageStage('Manufacturing (Shop Job Orders)', sjos.length || null,
     sjos.length ? (sjos.every(s => s.statusCode === 'F') ? 'done' : 'partial') : 'empty',
     sjos.length
       ? lineageSubList(['SJO No.', 'Date', 'Item', 'Qty', 'Status'],
-          sjos.map(s => `<tr><td>${s.sjoNo}</td><td>${fmtDate(s.sjoDate)}</td><td class="wrap">${(s.itemName || s.itemCode || '').trim()}</td><td>${fmtNum(s.orderedQty)}</td><td>${s.statusCode ?? ''}</td></tr>`))
+          sjos.map(s => `<tr><td>${s.sjoNo}</td><td>${fmtDate(s.sjoDate)}</td><td class="wrap">${(s.itemName || s.itemCode || '').trim()}</td><td>${fmtNum(s.orderedQty)}</td><td>${s.statusLabel ?? s.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">No manufacturing job triggered for this order.</div>`);
 
   html += lineageStage('Work Order &amp; Production Receipt', prod.length || null,
     prod.length ? (prod.every(p => p.statusCode === 'C') ? 'done' : 'partial') : 'empty',
     prod.length
       ? lineageSubList(['WO No.', 'Receipt Date', 'Item', 'Received / Ordered', 'Status'],
-          prod.map(p => `<tr><td>${p.workOrderNo ?? ''}</td><td>${fmtDate(p.receiptDate)}</td><td class="wrap">${(p.itemName || p.itemCode || '').trim()}</td><td>${fmtNum(p.receivedQty)} / ${fmtNum(p.orderedQty)}</td><td>${p.statusCode ?? ''}</td></tr>`))
+          prod.map(p => `<tr><td>${p.workOrderNo ?? ''}</td><td>${fmtDate(p.receiptDate)}</td><td class="wrap">${(p.itemName || p.itemCode || '').trim()}</td><td>${fmtNum(p.receivedQty)} / ${fmtNum(p.orderedQty)}</td><td>${p.statusLabel ?? p.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">No production receipt recorded yet.</div>`);
 
   html += lineageStage('Store — Material Issued', issues.length || null, issues.length ? 'done' : 'empty',
     issues.length
-      ? lineageSubList(['Issue No.', 'Date', 'SJO No.', 'Item(s)'],
-          issues.map(i => `<tr><td>${i.issueNo}</td><td>${fmtDate(i.issueDate)}</td><td>${i.sjoNo ?? ''}</td><td class="wrap">${i.itemNames || '—'}</td></tr>`))
+      ? lineageSubList(['Issue No.', 'Date', 'SJO No.', 'Item(s)', 'Status'],
+          issues.map(i => `<tr><td>${i.issueNo}</td><td>${fmtDate(i.issueDate)}</td><td>${i.sjoNo ?? ''}</td><td class="wrap">${i.itemNames || '—'}</td><td>${i.statusLabel ?? i.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">No material issued from store yet.</div>`);
 
   html += lineageStage('Despatch', challans.length || null, challans.length ? 'done' : (invoices.length ? 'partial' : 'empty'),
     challans.length
       ? lineageSubList(['Challan No.', 'Date', 'Item(s)', 'Status'],
-          challans.map(c => `<tr><td>${c.challanNo}</td><td>${fmtDate(c.challanDate)}</td><td class="wrap">${c.itemNames || '—'}</td><td>${c.statusCode ?? ''}</td></tr>`))
+          challans.map(c => `<tr><td>${c.challanNo}</td><td>${fmtDate(c.challanDate)}</td><td class="wrap">${c.itemNames || '—'}</td><td>${c.statusLabel ?? c.statusCode ?? ''}</td></tr>`))
       : (invoices.length
           ? `<div class="lineage-empty-note">No separate delivery challan — despatched together with the invoice below.</div>`
           : `<div class="lineage-empty-note">Not yet despatched.</div>`));
@@ -632,7 +635,7 @@ function renderLineageTimeline(data) {
   html += lineageStage('Invoice', invoices.length || null, invoices.length ? 'done' : 'empty',
     invoices.length
       ? lineageSubList(['Invoice No.', 'Date', 'Item(s)', 'Value', 'Status'],
-          invoices.map(i => `<tr><td>${i.invoiceNo}</td><td>${fmtDate(i.invoiceDate)}</td><td class="wrap">${i.itemNames || '—'}</td><td class="num">${fmtMoney(i.invoiceValue)}</td><td>${i.statusCode ?? ''}</td></tr>`))
+          invoices.map(i => `<tr><td>${i.invoiceNo}</td><td>${fmtDate(i.invoiceDate)}</td><td class="wrap">${i.itemNames || '—'}</td><td class="num">${fmtMoney(i.invoiceValue)}</td><td>${i.statusLabel ?? i.statusCode ?? ''}</td></tr>`))
       : `<div class="lineage-empty-note">Not yet invoiced.</div>`);
 
   html += `
@@ -940,7 +943,7 @@ async function loadSales() {
     ? `Invoices — ${label}` : (salesViewMode === 'all' ? `All invoices — ${fyText}` : 'Recent invoices');
 
   fillTable('table-sales-invoices', invoices,
-    r => `<tr${r.orderId ? ` class="clickable-row" onclick="openLineage('order',${r.orderId})"` : ''}><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
+    r => `<tr${r.orderId ? ` class="clickable-row" onclick="openLineage('order',${r.orderId})"` : ''}><td>${r.invoiceNo ?? ''}</td><td>${r.customerName || ''}</td>${dateTd(r.invoiceDate)}${moneyTd(r.invoiceValue)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td><td>${r.syncaxisOrderNo ?? '—'}</td></tr>`, 6);
   tableSummary('sales-invoices-summary', invoices, 'invoiceValue', 'invoice', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 }
 
@@ -1025,7 +1028,7 @@ async function loadPurchase() {
     ? `Material received — ${label}` : (purchaseViewMode === 'all' ? `All material received — ${fyText}` : 'Material received (GRN)');
 
   fillTable('table-purchase-bill-detail', bills,
-    r => `<tr${r.poId ? ` class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"` : ''}><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
+    r => `<tr${r.poId ? ` class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"` : ''}><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 6);
   tableSummary('purchase-bill-detail-summary', bills, 'billAmount', 'bill', isCompleteSet ? 'Total' : 'Total (of rows shown)');
 
   fillTable('table-purchase-orders', orders,
@@ -1102,7 +1105,7 @@ async function loadInventory() {
   document.getElementById('inv-production-receipts-title').textContent = invViewMode === 'all' ? `All production receipts — ${fyText}` : 'Recent production receipts';
 
   fillTable('table-inv-production-receipts', productionReceipts,
-    r => `<tr><td>${r.workOrderNo ?? ''}</td><td>${(r.itemCode || '').trim()}</td>${dateTd(r.receiptDate)}${numTd(r.receiptQty)}<td>${r.statusCode ?? ''}</td></tr>`, 5);
+    r => `<tr><td>${r.workOrderNo ?? ''}</td><td>${(r.itemCode || '').trim()}</td>${dateTd(r.receiptDate)}${numTd(r.receiptQty)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 5);
   tableSummary('inv-production-receipts-summary', productionReceipts, null, 'receipt', null);
 }
 
@@ -1297,9 +1300,10 @@ async function loadFinance() {
   const debtorsQuery = financeSelectedMonth
     ? monthQuery
     : (financeDebtorsViewMode === 'all' ? '?view=all' : '');
-  const [summary, aging, monthly, debtors, creditors, purchaseBills] = await Promise.all([
+  const [summary, aging, agingPayable, monthly, debtors, creditors, purchaseBills] = await Promise.all([
     fetchJSON('/api/finance/summary'),
     fetchJSON('/api/finance/aging'),
+    fetchJSON('/api/finance/aging-payable'),
     fetchJSON('/api/finance/monthly-breakdown' + fyQuery),
     fetchJSON('/api/finance/debtors' + debtorsQuery),
     fetchJSON('/api/finance/creditors' + debtorsQuery),
@@ -1307,10 +1311,16 @@ async function loadFinance() {
   ]);
   const s = summary[0] || {};
   document.getElementById('fin-receivable').textContent = fmtMoney(s.totalReceivable);
+  document.getElementById('fin-receivable-count').textContent = `${fmtNum(s.receivableCount)} customer${s.receivableCount === 1 ? '' : 's'}`;
   document.getElementById('fin-payable').textContent = fmtMoney(s.totalPayable);
+  document.getElementById('fin-payable-count').textContent = `${fmtNum(s.payableCount)} vendor${s.payableCount === 1 ? '' : 's'}`;
   document.getElementById('fin-overdue').textContent = fmtMoney(s.overdueReceivable);
+  document.getElementById('fin-overdue-count').textContent = `${fmtNum(s.overdueReceivableCount)} customer${s.overdueReceivableCount === 1 ? '' : 's'}`;
+  document.getElementById('fin-overdue-payable').textContent = fmtMoney(s.overduePayable);
+  document.getElementById('fin-overdue-payable-count').textContent = `${fmtNum(s.overduePayableCount)} vendor${s.overduePayableCount === 1 ? '' : 's'}`;
 
   barChart('chart-aging', aging.map(r => r.bucket.replace(/^\d\.\s*/, '')), aging.map(r => r.amount), 'Outstanding', '#A6423A');
+  barChart('chart-aging-payable', agingPayable.map(r => r.bucket.replace(/^\d\.\s*/, '')), agingPayable.map(r => r.amount), 'Payable', '#B8862F');
 
   const fyText = fyLabel(financeSelectedFY);
   document.getElementById('finance-breakdown-title').innerHTML =
@@ -1354,7 +1364,7 @@ async function loadFinance() {
   tableSummary('finance-creditors-summary', creditors, 'outstandingAmount', 'vendor', debtorsIsCompleteSet ? 'Total outstanding' : 'Total outstanding (of rows shown)');
 
   fillTable('table-purchase-bills', purchaseBills,
-    r => `<tr${r.poId ? ` class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"` : ''}><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusCode ?? ''}</td></tr>`, 6);
+    r => `<tr${r.poId ? ` class="clickable-row" onclick="openLineage('purchaseOrder',${r.poId})"` : ''}><td>${r.billNo ?? ''}</td><td>${r.vendorBillNo ?? '—'}</td><td>${r.vendorName || ''}</td>${dateTd(r.billDate)}${moneyTd(r.billAmount)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 6);
   tableSummary('finance-purchase-bills-summary', purchaseBills, 'billAmount', 'bill', billsIsCompleteSet ? 'Total' : 'Total (of rows shown)');
 }
 
@@ -1412,8 +1422,8 @@ async function loadProduction() {
   document.getElementById('prod-closed').textContent = fmtNum(s.closedThisMonth);
   document.getElementById('prod-overdue').textContent = fmtNum(s.overdueWorkOrders);
 
-  barChart('chart-wo-status', woStatus.map(r => r.statusCode ?? '(blank)'), woStatus.map(r => r.count), 'Work Orders', '#3E6B94');
-  barChart('chart-sjo-status', sjoStatus.map(r => r.statusCode ?? '(blank)'), sjoStatus.map(r => r.count), 'Shop Job Orders', '#3F7859');
+  barChart('chart-wo-status', woStatus.map(r => r.statusLabel ?? r.statusCode ?? '(blank)'), woStatus.map(r => r.count), 'Work Orders', '#3E6B94');
+  barChart('chart-sjo-status', sjoStatus.map(r => r.statusLabel ?? r.statusCode ?? '(blank)'), sjoStatus.map(r => r.count), 'Shop Job Orders', '#3F7859');
 
   const fyText = fyLabel(prodSelectedFY);
   document.getElementById('prod-breakdown-title').innerHTML =
@@ -1445,11 +1455,11 @@ async function loadProduction() {
   tableSummary('prod-oafs-summary', oafs, null, 'OAF', null);
 
   fillTable('table-prod-work-orders', workOrders,
-    r => `<tr><td>${r.woNo ?? ''}</td><td>${(r.itemCode || '').trim()}</td>${dateTd(r.orderDate)}${dateTd(r.dueDate)}${numTd(r.orderedQty)}${numTd(r.receivedQty)}<td>${r.statusCode ?? ''}</td></tr>`, 7);
+    r => `<tr><td>${r.woNo ?? ''}</td><td>${(r.itemCode || '').trim()}</td>${dateTd(r.orderDate)}${dateTd(r.dueDate)}${numTd(r.orderedQty)}${numTd(r.receivedQty)}<td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 7);
   tableSummary('prod-work-orders-summary', workOrders, null, 'work order', null);
 
   fillTable('table-prod-material-issued', materialIssued,
-    r => `<tr><td>${r.issueNo ?? ''}</td>${dateTd(r.issueDate)}<td>${r.sjoNo ?? ''}</td><td>${r.statusCode ?? ''}</td></tr>`, 4);
+    r => `<tr><td>${r.issueNo ?? ''}</td>${dateTd(r.issueDate)}<td>${r.sjoNo ?? ''}</td><td>${r.statusLabel ?? r.statusCode ?? ''}</td></tr>`, 4);
   tableSummary('prod-material-issued-summary', materialIssued, null, 'issue', null);
 
   fillTable('table-prod-ready', readyWorkOrders,
@@ -1465,8 +1475,10 @@ async function loadProduction() {
 // login is used deliberately) — no editable fields here or anywhere else in
 // the app; all data entry/updates happen in SourcePro ERP itself.
 // Clicking a summary stat card jumps to (smooth-scrolls) its section further
-// down the same page, rather than navigating anywhere — everything's on one
-// Action Items screen already, this just saves the scroll.
+// down the same page, rather than navigating anywhere — everything's already
+// on one screen. Despite the name (first used on Action Items), this is a
+// generic scroll-to-element-id helper reused by other panels too (e.g.
+// Finance's Total/Overdue receivable-payable cards).
 function scrollToActionSection(sectionId) {
   document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -1482,12 +1494,28 @@ async function loadActionItems() {
   ]);
   const rs = receivablesSummary[0] || {};
 
+  const sumBy = (rows, key) => rows.reduce((total, r) => total + (Number(r[key]) || 0), 0);
+
   document.getElementById('act-enquiries-count').textContent = fmtNum(enquiries.length);
+  // Enquiries carry no usable value in this data (XINEMDAMT is populated on
+  // 1 of 324 rows, effectively unused) — count only, no subvalue line here.
+
   document.getElementById('act-quotations-count').textContent = fmtNum(quotations.length);
+  document.getElementById('act-quotations-value').textContent = fmtMoney(sumBy(quotations, 'quotationValue'));
+
   document.getElementById('act-workorders-count').textContent = fmtNum(workOrders.length);
+  document.getElementById('act-workorders-value').textContent = fmtMoney(sumBy(workOrders, 'soValue'));
+
   document.getElementById('act-invoicing-count').textContent = fmtNum(invoicing.length);
+  // pendingValue (not soValue) — the amount actually still un-invoiced,
+  // matching what the table's own "Total pending" summary shows below.
+  document.getElementById('act-invoicing-value').textContent = fmtMoney(sumBy(invoicing, 'pendingValue'));
+
   document.getElementById('act-po-count').textContent = fmtNum(purchaseOrders.length);
+  document.getElementById('act-po-value').textContent = fmtMoney(sumBy(purchaseOrders, 'poValue'));
+
   document.getElementById('act-receivables-count').textContent = fmtNum(rs.customerCount);
+  document.getElementById('act-receivables-value').textContent = fmtMoney(rs.totalOutstanding);
 
   // Every row below opens that record's lineage on the Home/Global Search
   // page in a new tab (openLineage(kind, id)) — Enquiries/Quotations open
@@ -1690,7 +1718,7 @@ document.querySelectorAll('.nav-item').forEach(btn => {
 document.getElementById('logoutBtn').addEventListener('click', (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
-  btn.textContent = 'Signing out…';
+  btn.style.opacity = '0.5'; // icon-only button now — no text label to swap to "Signing out…"
   // Always land on the login page, even if /api/logout is slow or fails —
   // a destroyed-or-not session either way means the next page load bounces
   // through the auth gate correctly.
@@ -1701,6 +1729,40 @@ document.getElementById('logoutBtn').addEventListener('click', (e) => {
     goToLogin();
   });
 });
+
+// ---------------- Theme (light/dark) ----------------
+// Only the sidebar's own toggle changes this — deliberately NOT tied to the
+// OS/browser prefers-color-scheme, so opening the dashboard always starts
+// in whatever this user last chose (or light, the first time).
+function applyChartTheme(isDark) {
+  if (typeof Chart === 'undefined') return;
+  Chart.defaults.color = isDark ? '#B7C2CD' : '#4B5563';
+  Chart.defaults.borderColor = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const isDark = theme === 'dark';
+  document.querySelector('#themeToggleBtn .theme-icon-sun').hidden = !isDark;
+  document.querySelector('#themeToggleBtn .theme-icon-moon').hidden = isDark;
+  applyChartTheme(isDark);
+  try { localStorage.setItem('syncaxis-theme', theme); } catch (err) { /* private browsing etc — theme just won't persist */ }
+}
+
+function initTheme() {
+  let theme = 'light';
+  try { theme = localStorage.getItem('syncaxis-theme') || 'light'; } catch (err) { /* ignore */ }
+  applyTheme(theme);
+}
+
+document.getElementById('themeToggleBtn').addEventListener('click', () => {
+  const current = document.documentElement.getAttribute('data-theme') || 'light';
+  const next = current === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  refreshCurrent(); // re-renders any visible charts so they pick up the new Chart.defaults colors immediately
+});
+
+initTheme();
 
 // If this page is ever restored from the browser's back-forward cache
 // (e.g. pressing Back right after signing out), force a real reload so the

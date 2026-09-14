@@ -10,7 +10,26 @@
   --amber: #B8862F;
   --red: #A6423A;
   --green: #3F7859;
+  /* Heading/emphasis text color — kept separate from --navy because --navy
+     doubles as a background color (buttons, banners); flipping it for dark
+     mode would also flip those backgrounds, breaking their (fixed) white
+     text. Only --heading needs to go light-on-dark. */
+  --heading: #16324F;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Dark theme — toggled via the sidebar's theme button (dashboard.js), not
+   the OS/browser preference, so it only applies the light palette above
+   swaps out. Only the main content area's tokens change; the sidebar keeps
+   its own fixed dark-navy brand colors in both themes (see .sidebar/.brand/
+   .nav-item etc. below, which use literal colors, not these tokens). */
+:root[data-theme="dark"] {
+  --bg: #0F1721;
+  --surface: #182430;
+  --border: #2B3948;
+  --text: #DCE3EA;
+  --text-muted: #93A3B3;
+  --heading: #E7ECF1;
 }
 
 * { box-sizing: border-box; }
@@ -107,10 +126,11 @@ body {
 .sidebar-user {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 20px 16px 20px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  margin-bottom: 16px;
+  gap: 8px;
+  margin: 0 16px 16px 16px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 10px;
 }
 
 .user-avatar {
@@ -138,21 +158,26 @@ body {
   white-space: nowrap;
 }
 
-.sidebar-logout {
+.icon-btn {
   background: none;
   border: 1px solid rgba(255,255,255,0.15);
   color: #90A0AE;
-  padding: 5px 9px;
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
-  font-size: 11.5px;
   font-family: var(--font);
   cursor: pointer;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
-.sidebar-logout:hover {
+.icon-btn:hover {
   color: #fff;
   border-color: rgba(255,255,255,0.35);
+  background: rgba(255,255,255,0.08);
 }
 
 .status-dot {
@@ -168,10 +193,10 @@ body {
 /* ---------- Main content ---------- */
 .content {
   flex: 1;
+  min-width: 0; /* lets a flex item actually shrink/scroll instead of forcing the sidebar off-screen on narrow windows */
   height: 100vh;
   overflow-y: auto;
   padding: 28px 36px;
-  max-width: 1200px;
 }
 
 .content-header {
@@ -192,7 +217,7 @@ body {
   font-size: 22px;
   font-weight: 600;
   margin: 0;
-  color: var(--navy);
+  color: var(--heading);
 }
 
 .header-actions {
@@ -225,7 +250,7 @@ body {
 /* ---------- Stat row ---------- */
 .stat-row {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -252,13 +277,47 @@ body {
 }
 
 .stat-value {
-  font-size: 26px;
-  font-weight: 600;
-  color: var(--navy);
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--heading);
 }
 
-.stat-hero .stat-value { font-size: 30px; }
 .stat-alert .stat-value { color: var(--red); }
+
+.stat-value-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stat-subvalue {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.stat-alert .stat-subvalue { color: var(--red); opacity: 0.8; }
+
+/* Used where there's genuinely no value on file (e.g. Enquiries — the
+   source ERP has no populated estimate field for any of them) instead of a
+   fabricated ₹0, which would misleadingly read as a real computed total. */
+.stat-subvalue-muted {
+  font-size: 13px;
+  font-weight: 500;
+  font-style: italic;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+/* Left-aligned secondary count next to a big right-aligned amount (Finance
+   panel's Total/Overdue receivable-payable cards) — deliberately lighter
+   than .stat-subvalue since the amount, not this count, is the headline
+   figure on these cards. */
+.stat-subcount {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
 
 .stat-clickable {
   cursor: pointer;
@@ -298,7 +357,7 @@ body {
   margin: 0 0 14px 0;
   font-size: 14px;
   font-weight: 600;
-  color: var(--navy);
+  color: var(--heading);
 }
 
 .card canvas {
@@ -543,10 +602,15 @@ body {
 }
 .home-logo {
   height: 72px;
-  transition: height 0.2s ease;
+  background: #fff;
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-sizing: content-box;
+  transition: height 0.2s ease, padding 0.2s ease;
 }
 .home-search-wrap.compact .home-logo {
   height: 30px;
+  padding: 5px 8px;
 }
 .home-search-bar {
   display: flex;
@@ -724,7 +788,7 @@ body {
 .lineage-stage-title {
   font-weight: 600;
   font-size: 13.5px;
-  color: var(--navy);
+  color: var(--heading);
   margin-bottom: 4px;
   display: flex;
   align-items: center;
